@@ -54,16 +54,32 @@ def _tone(freq: float, dur: float, sr: int = 44100, vol: float = 0.3):
     s = np.sin(2 * np.pi * freq * t) + 0.25 * np.sin(2 * np.pi * (2 * freq) * t)
     return vol * s
 
-
 def _env(samples: np.ndarray, sr: int = 44100, attack=0.01, release=0.08):
     n = len(samples)
+    if n == 0:
+        return samples
+
     a = int(sr * attack)
     r = int(sr * release)
+
+    # clamp per evitare a/r > n
+    a = max(0, min(a, n))
+    r = max(0, min(r, n))
+
+    # se attack + release supera n, ridistribuisci
+    if a + r > n:
+        # dai priorità a una release minima e riduci l'attack
+        r = min(r, n)
+        a = max(0, n - r)
+
     env = np.ones(n, dtype=np.float32)
+
     if a > 0:
-        env[:a] = np.linspace(0, 1, a)
+        env[:a] = np.linspace(0.0, 1.0, a, endpoint=True)
+
     if r > 0:
-        env[-r:] = np.linspace(1, 0, r)
+        env[n - r :] = np.linspace(1.0, 0.0, r, endpoint=True)
+
     return samples * env
 
 
@@ -147,11 +163,11 @@ def ensure_audio_assets():
     if not os.path.exists(SFX_WIN):
         _chime(SFX_WIN, [523.25, 659.25, 783.99, 1046.5], dur=0.12)
     if not os.path.exists(SFX_BONUS):
-        _chime(SFX_BONUS, [659.25, 783.99, 987.77], dur=0.10)
+        _chime(SFX_BONUS, [659.25, 783.99, 987.77], dur=0.12)
     if not os.path.exists(SFX_MALUS):
         _chime(SFX_MALUS, [392.00, 311.13, 246.94], dur=0.12)
     if not os.path.exists(SFX_END):
-        _chime(SFX_END, [523.25, 659.25, 783.99, 1046.5, 1318.5], dur=0.10)
+        _chime(SFX_END, [523.25, 659.25, 783.99, 1046.5, 1318.5], dur=0.12)
     if not os.path.exists(BGM_LOOP):
         _bgm_loop(BGM_LOOP)
 
