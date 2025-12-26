@@ -255,21 +255,19 @@ html = f"""
 
   /* Label posizionati correttamente: niente accatastamento */
   .seg-label {{
-    position: absolute;
-    top: 50%;
-    left: 50%;
-    transform-origin: 0 0;
-    width: 44%;
-    text-align: right;
-    padding-right: 10%;
-    font-weight: 1000;
-    letter-spacing: 0.04em;
-    text-transform: uppercase;
-    color: rgba(255,255,255,0.92);
-    text-shadow: 0 3px 4px rgba(0,0,0,0.35);
-    user-select: none;
-    font-size: clamp(14px, 2.0vw, 28px);
-  }}
+      position:absolute;
+      top:50%;
+      left:50%;
+      width:auto;              /* non 44% */
+      max-width: 48%;
+      text-align:center;       /* non right */
+      padding-right:0;         /* rimuovi */
+      font-weight:1000;
+      letter-spacing:0.02em;
+      text-transform:uppercase;
+      white-space:nowrap;
+      font-size: clamp(12px, 1.6vw, 22px);
+      }}
   .seg-label.active {{
     filter: drop-shadow(0 0 10px rgba(255, 240, 170, 0.92));
   }}
@@ -501,7 +499,7 @@ html = f"""
   }}
 
   const bulbsCount = 32;
-  const spinSeconds = 10;
+  const spinSeconds = 6;
 
   // -----------------------------
   // DOM
@@ -584,30 +582,38 @@ html = f"""
     return `conic-gradient(from -90deg, ${{stops.join(", ")}})`;
   }}
 
-  function renderLabels(activeIndex = null) {{
-    labels.innerHTML = "";
-    segs.forEach((seg, i) => {{
-      const angle = (i + 0.5) * sliceDeg;
+  function renderLabels(activeIndex = null) {
+      labels.innerHTML = "";
+    
+      const r = 210; // distanza dal centro (regola se vuoi più interno/esterno)
+      const baseRot = -90; // perché il conic-gradient parte da -90deg
+    
+      segs.forEach((seg, i) => {
+        const angleDeg = (i + 0.5) * sliceDeg + baseRot; // raggio centrale dello spicchio
+    
+        const div = document.createElement("div");
+        div.className = "seg-label";
+        if (isBurned(seg.id)) div.classList.add("burned");
+        if (activeIndex !== null && i === activeIndex) div.classList.add("active");
+    
+        if (seg.kind === "malus") {
+          div.textContent = "IMPREVISTO";
+        } else {
+          div.textContent = `PREMIO ${seg.label}`;
+        }
+    
+        // Posiziona dentro lo spicchio, orientato lungo il raggio
+        // - translate(-50%,-50%) per centro
+        // - rotate(angle) per orientare lungo raggio
+        // - translateY(-r) per andare verso l'esterno (in alto nella rotazione)
+        // - rotate(90) per far leggere il testo dall'interno verso l'esterno
+        div.style.transform =
+          `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-${r}px) rotate(90deg)`;
+    
+        labels.appendChild(div);
+      });
+  }
 
-      const div = document.createElement("div");
-      div.className = "seg-label";
-      if (isBurned(seg.id)) div.classList.add("burned");
-      if (activeIndex !== null && i === activeIndex) div.classList.add("active");
-
-      div.textContent = (seg.kind === "malus") ? "IMPREVISTO" : seg.label;
-
-      // posizionamento corretto:
-      // 1) sposta l'origine al centro (translate(-50%,-50%))
-      // 2) ruota di angle
-      // 3) trasla lungo raggio (in px) verso l'esterno
-      // 4) contro-ruota per tenere testo dritto
-      const r = 250; // raggio label, calibrato per wheel grande
-      div.style.transform =
-        `translate(-50%, -50%) rotate(${{angle}}deg) translate(${{r}}px, 0px) rotate(${{-angle}}deg)`;
-
-      labels.appendChild(div);
-    }});
-  }}
 
   function renderBulbs() {{
     rim.innerHTML = "";
