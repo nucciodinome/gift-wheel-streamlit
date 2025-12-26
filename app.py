@@ -528,16 +528,18 @@ JS = r"""
     renderBulbs();
     face.style.background = buildGradient();
     renderLabels(null);
+    updateUI();
 
-  spinBtn.addEventListener("click", () => {
-    // questo click sblocca audio nei browser
-    try {
-      bgm.volume = 0.7;
-      bgm.play().catch(() => {});
-    } catch (e) {}
+    spinBtn.addEventListener("click", () => {
+      // questo click sblocca audio nei browser
+      try {
+        bgm.volume = 0.7;
+        bgm.play().catch(() => {});
+      } catch (e) {}
   
-    spin();
-  });
+      spin();
+    });
+  }
     
     // Listener anche su tutta la card (clic ovunque per iniziare)
     overlayStart.addEventListener("click", (e) => {
