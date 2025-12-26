@@ -1,645 +1,734 @@
 import base64
-import json
 import os
-import random
-import time
-from dataclasses import dataclass
-from typing import List, Dict, Optional, Tuple
-
-import numpy as np
 import streamlit as st
 import streamlit.components.v1 as components
 
-
-# ----------------------------
-# Config
-# ----------------------------
 st.set_page_config(page_title="Ruota Regali", page_icon="🎁", layout="wide")
 
 ASSETS_DIR = "assets"
-DEFAULT_BGM_PATH = os.path.join(ASSETS_DIR, "bgm.mp3")
-DEFAULT_SPIN_SFX_PATH = os.path.join(ASSETS_DIR, "spin.mp3")
+BGM_PATH = os.path.join(ASSETS_DIR, "bgm.mp3")
+SPIN_PATH = os.path.join(ASSETS_DIR, "spin.mp3")
+GIFT_PATH = os.path.join(ASSETS_DIR, "gift.mp3")
 
-WHEEL_BULBS = 28  # luci sul bordo
-BASE_SPINS = 5    # giri completi prima di fermarsi
+def b64_file(path: str) -> str:
+    if not os.path.exists(path):
+        st.error(f"File mancante: {path}")
+        st.stop()
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
 
+bgm_b64 = b64_file(BGM_PATH)
+spin_b64 = b64_file(SPIN_PATH)
+gift_b64 = b64_file(GIFT_PATH)
 
-# ----------------------------
-# Modelli
-# ----------------------------
-@dataclass(frozen=True)
-class SpecialSlot:
-    code: str
-    label: str
-    kind: str  # bonus, malus
+# UI minimale, niente menu setup
+st.markdown(
+    """
+    <style>
+      .block-container { padding-top: 1.2rem; padding-bottom: 1.2rem; }
+      header, footer { visibility: hidden; height: 0; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
+html = f"""
+<div id="app">
+  <div class="topbar">
+    <div class="title">🎁 Ruota Regali</div>
+    <div class="turn" id="turnLabel">Turno: Player 1</div>
+  </div>
 
-SPECIAL_SLOTS = [
-    SpecialSlot(code="BONUS_2PICK", label="BONUS: scegli tra 2", kind="bonus"),
-    SpecialSlot(code="BONUS_SWAP", label="BONUS: scambio", kind="bonus"),
-    SpecialSlot(code="MALUS_WORST2", label="MALUS: peggiore di 2", kind="malus"),
-    SpecialSlot(code="MALUS_SKIP", label="MALUS: salta prossimo", kind="malus"),
-]
-
-
-# ----------------------------
-# State
-# ----------------------------
-def init_state():
-    if "players" not in st.session_state:
-        st.session_state.players = [f"Player {i}" for i in range(1, 11)]
-    if "prizes" not in st.session_state:
-        st.session_state.prizes = [str(i) for i in range(1, 11)]
-    if "assignments" not in st.session_state:
-        st.session_state.assignments = {}  # player -> prize
-    if "player_idx" not in st.session_state:
-        st.session_state.player_idx = 0
-    if "burned_prizes" not in st.session_state:
-        st.session_state.burned_prizes = set()
-    if "burned_specials" not in st.session_state:
-        st.session_state.burned_specials = set()
-    if "skip_next" not in st.session_state:
-        st.session_state.skip_next = set()
-
-    if "pending_effect" not in st.session_state:
-        st.session_state.pending_effect = None
-
-    if "music_enabled" not in st.session_state:
-        st.session_state.music_enabled = False
-
-    if "bgm_bytes" not in st.session_state:
-        st.session_state.bgm_bytes = None
-    if "spin_bytes" not in st.session_state:
-        st.session_state.spin_bytes = None
-
-    if "wheel_rotation" not in st.session_state:
-        st.session_state.wheel_rotation = 0.0  # gradi, cresce
-
-    if "last_audio_event" not in st.session_state:
-        st.session_state.last_audio_event = None  # "spin" etc
-
-
-def reset_game(players: List[str], prizes: List[str]):
-    st.session_state.players = players
-    st.session_state.prizes = prizes
-    st.session_state.assignments = {}
-    st.session_state.player_idx = 0
-    st.session_state.burned_prizes = set()
-    st.session_state.burned_specials = set()
-    st.session_state.skip_next = set()
-    st.session_state.pending_effect = None
-    st.session_state.wheel_rotation = 0.0
-    st.session_state.last_audio_event = None
-
-
-def current_player() -> str:
-    return st.session_state.players[st.session_state.player_idx]
-
-
-def advance_player():
-    st.session_state.player_idx = (st.session_state.player_idx + 1) % len(st.session_state.players)
-
-
-# ----------------------------
-# Audio helpers
-# ----------------------------
-def read_file_bytes(path: str) -> Optional[bytes]:
-    if path and os.path.exists(path):
-        with open(path, "rb") as f:
-            return f.read()
-    return None
-
-
-def bytes_to_data_uri(file_bytes: bytes, mime: str) -> str:
-    b64 = base64.b64encode(file_bytes).decode("utf-8")
-    return f"data:{mime};base64,{b64}"
-
-
-# ----------------------------
-# Ruota: segmenti e rendering
-# ----------------------------
-def build_segments() -> List[Dict]:
-    # ordine fisso: 10 premi + 4 speciali
-    segs = []
-    for p in st.session_state.prizes:
-        segs.append({"id": f"PRIZE_{p}", "label": p, "kind": "prize"})
-    for s in SPECIAL_SLOTS:
-        segs.append({"id": s.code, "label": s.label, "kind": s.kind})
-    return segs
-
-
-def is_burned(seg_id: str) -> bool:
-    if seg_id.startswith("PRIZE_"):
-        prize = seg_id.split("_", 1)[1]
-        return prize in st.session_state.burned_prizes
-    return seg_id in st.session_state.burned_specials
-
-
-def seg_color(i: int, seg: Dict) -> str:
-    # palette stile “casino”: rosso e crema, bonus oro, malus bordeaux
-    if is_burned(seg["id"]):
-        return "#7A7A7A"
-    if seg["kind"] == "prize":
-        return "#B51E1E" if (i % 2 == 0) else "#F4E2C6"
-    if seg["kind"] == "bonus":
-        return "#D8A83A"
-    return "#7C1430"
-
-
-def build_conic_gradient(segs: List[Dict]) -> str:
-    n = len(segs)
-    slice_deg = 360.0 / n
-    stops = []
-    for i, seg in enumerate(segs):
-        c = seg_color(i, seg)
-        a0 = i * slice_deg
-        a1 = (i + 1) * slice_deg
-        stops.append(f"{c} {a0:.4f}deg {a1:.4f}deg")
-    # from -90deg così il primo spicchio inizia in alto
-    return "conic-gradient(from -90deg, " + ", ".join(stops) + ")"
-
-
-def compute_target_rotation_for_index(index: int, n: int, extra_spins: int = BASE_SPINS) -> float:
-    slice_deg = 360.0 / n
-    center_deg = (index + 0.5) * slice_deg
-    # vogliamo portare il centro in alto (0deg “top” dopo from -90deg), quindi ruotiamo di (360 - center)
-    base = (360.0 - center_deg) % 360.0
-    return extra_spins * 360.0 + base
-
-
-def render_wheel_html(
-    segs: List[Dict],
-    rotation_deg: float,
-    highlight_index: Optional[int],
-    big: bool = True,
-) -> str:
-    n = len(segs)
-    gradient = build_conic_gradient(segs)
-    size_px = 680 if big else 520
-
-    # etichette: posizionate con trasformazioni
-    slice_deg = 360.0 / n
-    label_divs = []
-    for i, seg in enumerate(segs):
-        angle = (i + 0.5) * slice_deg
-        # testo corto per premi, testo più piccolo per speciali
-        label = seg["label"]
-        short = label if seg["kind"] == "prize" else ("BONUS" if seg["kind"] == "bonus" else "MALUS")
-        burned_cls = "burned" if is_burned(seg["id"]) else ""
-        active_cls = "active" if (highlight_index is not None and i == highlight_index) else ""
-        label_divs.append(
-            f"""
-            <div class="seg-label {burned_cls} {active_cls}"
-                 style="transform: rotate({angle:.4f}deg) translateY(-39%) rotate({-angle:.4f}deg);">
-              {short}
-            </div>
-            """
-        )
-
-    bulbs = "\n".join([f'<div class="bulb b{i}"></div>' for i in range(WHEEL_BULBS)])
-
-    # luci: posizionate su circonferenza
-    bulb_css = []
-    for i in range(WHEEL_BULBS):
-        ang = (360.0 * i) / WHEEL_BULBS
-        bulb_css.append(
-            f"""
-            .b{i} {{
-              transform: rotate({ang:.4f}deg) translateY(-49%);
-            }}
-            """
-        )
-
-    html = f"""
+  <div class="stage">
     <div class="wheel-wrap">
       <div class="pointer"></div>
 
-      <div class="rim">
-        {bulbs}
+      <div class="rim" id="rim">
+        <!-- bulbs injected by JS -->
       </div>
 
-      <div class="wheel" style="--rot: {rotation_deg:.4f}deg;">
-        <div class="face"></div>
-        {''.join(label_divs)}
+      <div class="wheel" id="wheel">
+        <div class="face" id="face"></div>
+        <div class="labels" id="labels"></div>
         <div class="hub"></div>
       </div>
     </div>
 
-    <style>
-      .wheel-wrap {{
-        position: relative;
-        width: min({size_px}px, 92vw);
-        aspect-ratio: 1 / 1;
-        margin: 0 auto;
+    <div class="controls">
+      <button id="spinBtn" class="spin">SPIN</button>
+      <div class="meta">
+        <div class="pill">Premi rimasti: <span id="remaining">10</span></div>
+        <div class="pill">Bonus/Malus bruciati: <span id="burnedSpecials">0</span></div>
+      </div>
+      <div class="assignments" id="assignments"></div>
+    </div>
+  </div>
+
+  <div class="overlay" id="overlay" aria-hidden="true">
+    <div class="gift-card" id="giftCard">
+      <div class="stars">
+        <span>✨</span><span>✨</span><span>✨</span><span>✨</span><span>✨</span>
+      </div>
+      <div class="gift-box">
+        <div class="gift-num" id="giftNum">1</div>
+      </div>
+      <div class="stars">
+        <span>✨</span><span>✨</span><span>✨</span><span>✨</span><span>✨</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Audio -->
+  <audio id="bgm" autoplay loop preload="auto" playsinline>
+    <source src="data:audio/mpeg;base64,{bgm_b64}" type="audio/mpeg" />
+  </audio>
+
+  <audio id="spinSfx" preload="auto" playsinline>
+    <source src="data:audio/mpeg;base64,{spin_b64}" type="audio/mpeg" />
+  </audio>
+
+  <audio id="giftSfx" preload="auto" playsinline>
+    <source src="data:audio/mpeg;base64,{gift_b64}" type="audio/mpeg" />
+  </audio>
+</div>
+
+<style>
+  :root {{
+    --bg: #0B1220;
+    --panel: #111A2E;
+    --gold: #E2B24A;
+    --deep-red: #7C1430;
+    --cream: #F4E2C6;
+    --red: #B51E1E;
+    --gray: #707070;
+    --text: #E5E7EB;
+  }}
+
+  body {{ background: var(--bg); }}
+  #app {{
+    color: var(--text);
+    font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
+  }}
+
+  .topbar {{
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin: 0 0 14px 0;
+    padding: 10px 14px;
+    background: rgba(17, 26, 46, 0.75);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    backdrop-filter: blur(6px);
+  }}
+  .title {{
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    font-size: 18px;
+  }}
+  .turn {{
+    font-weight: 800;
+    opacity: 0.95;
+  }}
+
+  .stage {{
+    display: grid;
+    grid-template-columns: 1.2fr 0.8fr;
+    gap: 18px;
+    align-items: start;
+  }}
+
+  .wheel-wrap {{
+    position: relative;
+    width: min(760px, 92vw);
+    aspect-ratio: 1 / 1;
+    margin: 0 auto;
+  }}
+
+  .pointer {{
+    position: absolute;
+    top: 0.6%;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 0; height: 0;
+    border-left: 24px solid transparent;
+    border-right: 24px solid transparent;
+    border-bottom: 46px solid var(--gold);
+    filter: drop-shadow(0 6px 6px rgba(0,0,0,0.35));
+    z-index: 50;
+  }}
+
+  .rim {{
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.45) 86%, rgba(0,0,0,0.85) 100%);
+    z-index: 5;
+  }}
+
+  .bulb {{
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 12px;
+    height: 12px;
+    margin-left: -6px;
+    margin-top: -6px;
+    border-radius: 50%;
+    transform-origin: 0 0;
+    animation: blink 1.1s infinite;
+  }}
+  .bulb.a {{
+    background: #FFD36B;
+    box-shadow: 0 0 10px rgba(255, 210, 110, 0.95);
+  }}
+  .bulb.b {{
+    background: #FF6B6B;
+    box-shadow: 0 0 10px rgba(255, 105, 105, 0.9);
+    animation-delay: 0.22s;
+  }}
+
+  @keyframes blink {{
+    0% {{ opacity: 0.35; filter: saturate(0.9); }}
+    50% {{ opacity: 1; filter: saturate(1.2); }}
+    100% {{ opacity: 0.35; filter: saturate(0.9); }}
+  }}
+
+  .wheel {{
+    position: absolute;
+    inset: 6%;
+    border-radius: 50%;
+    transform: rotate(0deg);
+    z-index: 10;
+  }}
+
+  .face {{
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    box-shadow:
+      inset 0 0 0 10px rgba(226, 178, 74, 0.9),
+      inset 0 0 0 16px rgba(124, 20, 48, 0.9),
+      0 22px 40px rgba(0,0,0,0.45);
+  }}
+
+  .labels {{
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    pointer-events: none;
+  }}
+
+  .seg-label {{
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 46%;
+    text-align: right;
+    padding-right: 8%;
+    font-weight: 900;
+    letter-spacing: 0.02em;
+    color: rgba(255,255,255,0.92);
+    text-shadow: 0 3px 4px rgba(0,0,0,0.35);
+    user-select: none;
+    font-size: clamp(14px, 2.2vw, 30px);
+  }}
+  .seg-label.burned {{
+    color: rgba(255,255,255,0.55);
+    text-shadow: none;
+  }}
+  .seg-label.active {{
+    filter: drop-shadow(0 0 10px rgba(255, 240, 170, 0.85));
+  }}
+
+  .hub {{
+    position: absolute;
+    inset: 40%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 30% 30%, #FFE9A6 0%, #D8A83A 35%, #A47A1F 70%, #5A3A08 100%);
+    box-shadow: inset 0 0 0 8px rgba(255,255,255,0.12), 0 10px 22px rgba(0,0,0,0.35);
+  }}
+
+  .controls {{
+    background: rgba(17, 26, 46, 0.75);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 16px;
+    padding: 14px;
+  }}
+
+  .spin {{
+    width: 100%;
+    font-size: 22px;
+    font-weight: 900;
+    padding: 14px 16px;
+    border-radius: 16px;
+    border: 0;
+    cursor: pointer;
+    background: linear-gradient(180deg, #F3C35A 0%, #C58B19 100%);
+    color: #23180A;
+    box-shadow: 0 14px 26px rgba(0,0,0,0.35);
+  }}
+  .spin:disabled {{
+    opacity: 0.55;
+    cursor: not-allowed;
+  }}
+
+  .meta {{
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+  }}
+  .pill {{
+    background: rgba(255,255,255,0.06);
+    border: 1px solid rgba(255,255,255,0.08);
+    padding: 10px 12px;
+    border-radius: 14px;
+    font-weight: 800;
+  }}
+
+  .assignments {{
+    margin-top: 12px;
+    font-size: 14px;
+    line-height: 1.35;
+    opacity: 0.95;
+  }}
+  .assignments .row {{
+    display: flex;
+    justify-content: space-between;
+    padding: 7px 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }}
+  .assignments .row:last-child {{ border-bottom: 0; }}
+  .assignments .p {{ font-weight: 800; }}
+  .assignments .v {{ opacity: 0.9; }}
+
+  .overlay {{
+    position: fixed;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    background: rgba(0,0,0,0.45);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 200ms ease;
+    z-index: 9999;
+  }}
+  .overlay.show {{
+    opacity: 1;
+    pointer-events: auto;
+  }}
+
+  .gift-card {{
+    display: grid;
+    gap: 14px;
+    place-items: center;
+    transform: scale(0.7);
+    opacity: 0;
+  }}
+  .gift-card.go {{
+    animation: giftPop 2s ease forwards;
+  }}
+  @keyframes giftPop {{
+    0% {{ transform: scale(0.55); opacity: 0; }}
+    15% {{ transform: scale(1.02); opacity: 1; }}
+    35% {{ transform: scale(0.96); }}
+    55% {{ transform: scale(1.03); }}
+    75% {{ transform: scale(0.98); }}
+    100% {{ transform: scale(1.25); opacity: 0; }}
+  }}
+
+  .gift-box {{
+    width: min(420px, 72vw);
+    aspect-ratio: 1 / 1;
+    border-radius: 28px;
+    background: linear-gradient(180deg, #E03B3B 0%, #8F1414 100%);
+    box-shadow: 0 24px 60px rgba(0,0,0,0.55), inset 0 0 0 10px rgba(255,255,255,0.12);
+    display: grid;
+    place-items: center;
+    position: relative;
+  }}
+  .gift-box::before {{
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 28px;
+    background: linear-gradient(90deg, rgba(226,178,74,0.0) 0%, rgba(226,178,74,0.9) 48%, rgba(226,178,74,0.0) 100%);
+    mix-blend-mode: overlay;
+    opacity: 0.75;
+  }}
+  .gift-num {{
+    font-size: clamp(56px, 7vw, 110px);
+    font-weight: 1000;
+    color: #FFE9A6;
+    text-shadow: 0 8px 18px rgba(0,0,0,0.45);
+    position: relative;
+    z-index: 1;
+  }}
+  .stars {{
+    font-size: 28px;
+    opacity: 0.95;
+    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.35));
+  }}
+
+  @media (max-width: 980px) {{
+    .stage {{
+      grid-template-columns: 1fr;
+    }}
+  }}
+</style>
+
+<script>
+(() => {{
+  const players = Array.from({{length: 10}}, (_, i) => `Player ${{i+1}}`);
+  const specials = [
+    {{ id: "BONUS_2PICK", label: "BONUS: scegli tra 2", kind: "bonus" }},
+    {{ id: "BONUS_SWAP", label: "BONUS: scambio", kind: "bonus" }},
+    {{ id: "MALUS_WORST2", label: "MALUS: peggiore di 2", kind: "malus" }},
+    {{ id: "MALUS_SKIP", label: "MALUS: salta prossimo", kind: "malus" }},
+  ];
+  const prizes = Array.from({{length: 10}}, (_, i) => String(i+1));
+  const segs = [
+    ...prizes.map(p => ({{ id: `PRIZE_${{p}}`, label: p, kind: "prize" }})),
+    ...specials
+  ];
+
+  const wheel = document.getElementById("wheel");
+  const face = document.getElementById("face");
+  const labels = document.getElementById("labels");
+  const rim = document.getElementById("rim");
+  const spinBtn = document.getElementById("spinBtn");
+  const turnLabel = document.getElementById("turnLabel");
+  const remainingEl = document.getElementById("remaining");
+  const burnedSpecialsEl = document.getElementById("burnedSpecials");
+  const assignmentsEl = document.getElementById("assignments");
+
+  const overlay = document.getElementById("overlay");
+  const giftCard = document.getElementById("giftCard");
+  const giftNum = document.getElementById("giftNum");
+
+  const bgm = document.getElementById("bgm");
+  const spinSfx = document.getElementById("spinSfx");
+  const giftSfx = document.getElementById("giftSfx");
+
+  const bulbsCount = 28;
+  const sliceDeg = 360 / segs.length;
+
+  let rotation = 0;
+  let playerIdx = 0;
+
+  const burnedPrizes = new Set();
+  const burnedSpecials = new Set();
+  const assignments = {{}};
+  const skipNext = new Set();
+
+  function isBurned(id) {{
+    if (id.startsWith("PRIZE_")) return burnedPrizes.has(id.split("_")[1]);
+    return burnedSpecials.has(id);
+  }}
+
+  function segColor(i, seg) {{
+    if (isBurned(seg.id)) return "#707070";
+    if (seg.kind === "prize") return (i % 2 === 0) ? "#B51E1E" : "#F4E2C6";
+    if (seg.kind === "bonus") return "#D8A83A";
+    return "#7C1430";
+  }}
+
+  function buildGradient() {{
+    const stops = segs.map((seg, i) => {{
+      const c = segColor(i, seg);
+      const a0 = i * sliceDeg;
+      const a1 = (i + 1) * sliceDeg;
+      return `${{c}} ${{a0}}deg ${{a1}}deg`;
+    }});
+    return `conic-gradient(from -90deg, ${{stops.join(", ")}})`;
+  }}
+
+  function renderLabels(activeIndex = null) {{
+    labels.innerHTML = "";
+    segs.forEach((seg, i) => {{
+      const angle = (i + 0.5) * sliceDeg;
+      const div = document.createElement("div");
+      div.className = "seg-label";
+      if (isBurned(seg.id)) div.classList.add("burned");
+      if (activeIndex !== null && i === activeIndex) div.classList.add("active");
+
+      const short = (seg.kind === "prize") ? seg.label : (seg.kind === "bonus" ? "BONUS" : "MALUS");
+      div.textContent = short;
+
+      div.style.transform = `rotate(${{angle}}deg) translateY(-39%) rotate(${{-angle}}deg)`;
+      labels.appendChild(div);
+    }});
+  }}
+
+  function renderRimBulbs() {{
+    rim.innerHTML = "";
+    for (let i = 0; i < bulbsCount; i++) {{
+      const b = document.createElement("div");
+      b.className = "bulb " + (i % 2 === 0 ? "a" : "b");
+      const ang = 360 * i / bulbsCount;
+      b.style.transform = `rotate(${{ang}}deg) translateY(-49%)`;
+      rim.appendChild(b);
+    }}
+  }}
+
+  function updateUI() {{
+    const p = players[playerIdx];
+    turnLabel.textContent = `Turno: ${{p}}`;
+
+    const remaining = prizes.filter(x => !burnedPrizes.has(x)).length;
+    remainingEl.textContent = String(remaining);
+    burnedSpecialsEl.textContent = String(burnedSpecials.size);
+
+    const rows = players.map(pl => {{
+      const val = assignments[pl] ? assignments[pl] : "";
+      const state = assignments[pl] ? "✅" : "⏳";
+      return `<div class="row"><div class="p">${{pl}}</div><div class="v">${{state}} ${{val}}</div></div>`;
+    }});
+    assignmentsEl.innerHTML = rows.join("");
+    spinBtn.disabled = remaining === 0;
+  }}
+
+  function burnSegment(seg) {{
+    if (seg.kind === "prize") burnedPrizes.add(seg.label);
+    else burnedSpecials.add(seg.id);
+  }}
+
+  function fadeAudioTo(audio, target, ms) {{
+    try {{
+      const start = audio.volume;
+      const delta = target - start;
+      const steps = Math.max(1, Math.floor(ms / 16));
+      let i = 0;
+      const timer = setInterval(() => {{
+        i++;
+        audio.volume = Math.max(0, Math.min(1, start + delta * (i / steps)));
+        if (i >= steps) clearInterval(timer);
+      }}, 16);
+    }} catch (e) {{}}
+  }}
+
+  function computeRotationForIndex(index, extraSpins) {{
+    const center = (index + 0.5) * sliceDeg;
+    const base = (360 - center) % 360;
+    return extraSpins * 360 + base;
+  }}
+
+  function pickStartIndex() {{
+    return Math.floor(Math.random() * segs.length);
+  }}
+
+  function nextUnburnedIndex(startIdx) {{
+    let idx = startIdx;
+    const path = [];
+    let safety = 0;
+    while (isBurned(segs[idx].id)) {{
+      path.push(idx);
+      idx = (idx + 1) % segs.length;
+      safety++;
+      if (safety > segs.length + 2) break;
+    }}
+    return {{ finalIdx: idx, skippedPath: path }};
+  }}
+
+  async function playSpinAudio10s() {{
+    if (!spinSfx) return;
+    try {{
+      spinSfx.currentTime = 0;
+      await spinSfx.play();
+      setTimeout(() => {{
+        try {{
+          spinSfx.pause();
+          spinSfx.currentTime = 0;
+        }} catch (e) {{}}
+      }}, 10000);
+    }} catch (e) {{}}
+  }}
+
+  async function playGiftAudio() {{
+    if (!giftSfx) return;
+    try {{
+      giftSfx.currentTime = 0;
+      await giftSfx.play();
+    }} catch (e) {{}}
+  }}
+
+  function showGiftAnimation(numberStr) {{
+    giftNum.textContent = numberStr;
+    overlay.classList.add("show");
+    giftCard.classList.remove("go");
+    void giftCard.offsetWidth;
+    giftCard.classList.add("go");
+
+    setTimeout(() => {{
+      overlay.classList.remove("show");
+      giftCard.classList.remove("go");
+    }}, 2000);
+  }}
+
+  function advancePlayer() {{
+    playerIdx = (playerIdx + 1) % players.length;
+  }}
+
+  function applySpecial(seg, player) {{
+    const avail = prizes.filter(x => !burnedPrizes.has(x));
+    if (avail.length === 0) return;
+
+    if (seg.id === "MALUS_SKIP") {{
+      skipNext.add(player);
+      return;
+    }}
+
+    if (seg.id === "BONUS_2PICK") {{
+      const a = avail[Math.floor(Math.random() * avail.length)];
+      const bPool = avail.filter(x => x !== a);
+      const b = bPool.length ? bPool[Math.floor(Math.random() * bPool.length)] : a;
+      const chosen = window.confirm(`BONUS: scegli tra ${{a}} e ${{b}}. OK=${{a}}, Annulla=${{b}}`) ? a : b;
+      burnedPrizes.add(chosen);
+      assignments[player] = chosen;
+      return;
+    }}
+
+    if (seg.id === "MALUS_WORST2") {{
+      const a = avail[Math.floor(Math.random() * avail.length)];
+      const bPool = avail.filter(x => x !== a);
+      const b = bPool.length ? bPool[Math.floor(Math.random() * bPool.length)] : a;
+      const ai = parseInt(a, 10);
+      const bi = parseInt(b, 10);
+      const worst = (Number.isFinite(ai) && Number.isFinite(bi)) ? (ai > bi ? a : b) : b;
+      burnedPrizes.add(worst);
+      assignments[player] = worst;
+      return;
+    }}
+
+    if (seg.id === "BONUS_SWAP") {{
+      const targets = players.filter(pl => pl !== player && assignments[pl]);
+      if (!targets.length) {{
+        const x = avail[Math.floor(Math.random() * avail.length)];
+        burnedPrizes.add(x);
+        assignments[player] = x;
+        return;
       }}
-
-      .pointer {{
-        position: absolute;
-        top: 0.8%;
-        left: 50%;
-        transform: translateX(-50%);
-        width: 0;
-        height: 0;
-        border-left: 22px solid transparent;
-        border-right: 22px solid transparent;
-        border-bottom: 42px solid #E2B24A;
-        filter: drop-shadow(0 6px 6px rgba(0,0,0,0.35));
-        z-index: 50;
-      }}
-
-      .rim {{
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: radial-gradient(circle at 50% 50%, rgba(0,0,0,0) 62%, rgba(0,0,0,0.45) 86%, rgba(0,0,0,0.85) 100%);
-        z-index: 5;
-      }}
-
-      .bulb {{
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        width: 12px;
-        height: 12px;
-        margin-left: -6px;
-        margin-top: -6px;
-        border-radius: 50%;
-        background: #FFD36B;
-        box-shadow: 0 0 10px rgba(255, 210, 110, 0.95);
-        transform-origin: 0 0;
-        animation: blink 1.1s infinite;
-      }}
-
-      /* alterna fase di blink */
-      .bulb:nth-child(2n) {{
-        animation-delay: 0.22s;
-        background: #FF6B6B;
-        box-shadow: 0 0 10px rgba(255, 105, 105, 0.9);
-      }}
-
-      @keyframes blink {{
-        0% {{ opacity: 0.35; filter: saturate(0.9); }}
-        50% {{ opacity: 1; filter: saturate(1.2); }}
-        100% {{ opacity: 0.35; filter: saturate(0.9); }}
-      }}
-
-      {''.join(bulb_css)}
-
-      .wheel {{
-        position: absolute;
-        inset: 6%;
-        border-radius: 50%;
-        transform: rotate(var(--rot));
-        transition: transform 2.6s cubic-bezier(0.12, 0.62, 0.10, 1);
-        z-index: 10;
-      }}
-
-      .face {{
-        position: absolute;
-        inset: 0;
-        border-radius: 50%;
-        background: {gradient};
-        box-shadow:
-          inset 0 0 0 10px rgba(226, 178, 74, 0.9),
-          inset 0 0 0 16px rgba(120, 20, 48, 0.9),
-          0 22px 40px rgba(0,0,0,0.45);
-      }}
-
-      .seg-label {{
-        position: absolute;
-        top: 50%;
-        left: 50%;
-        transform-origin: center center;
-        width: 46%;
-        text-align: right;
-        padding-right: 8%;
-        font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial;
-        font-weight: 900;
-        letter-spacing: 0.02em;
-        color: rgba(255,255,255,0.92);
-        text-shadow: 0 3px 4px rgba(0,0,0,0.35);
-        user-select: none;
-        font-size: clamp(14px, 2.2vw, 28px);
-      }}
-
-      .seg-label.burned {{
-        color: rgba(255,255,255,0.55);
-        text-shadow: none;
-      }}
-
-      .seg-label.active {{
-        filter: drop-shadow(0 0 10px rgba(255, 240, 170, 0.85));
-      }}
-
-      .hub {{
-        position: absolute;
-        inset: 40%;
-        border-radius: 50%;
-        background: radial-gradient(circle at 30% 30%, #FFE9A6 0%, #D8A83A 35%, #A47A1F 70%, #5A3A08 100%);
-        box-shadow: inset 0 0 0 8px rgba(255,255,255,0.12), 0 10px 22px rgba(0,0,0,0.35);
-      }}
-    </style>
-    """
-    return html
-
-
-# ----------------------------
-# Logica spin con "salto" su bruciati
-# ----------------------------
-def pick_start_index(n: int) -> int:
-    return random.randrange(n)
-
-
-def next_unburned_index(segs: List[Dict], start_idx: int) -> Tuple[int, List[int]]:
-    """
-    Restituisce (idx_finale, lista_idx_passati_incluso_start_se_bruciato).
-    Se lo start è bruciato, viene aggiunto ai passaggi e si va avanti fino a trovare valido.
-    """
-    n = len(segs)
-    path = []
-    idx = start_idx
-    safety = 0
-    while is_burned(segs[idx]["id"]):
-        path.append(idx)
-        idx = (idx + 1) % n
-        safety += 1
-        if safety > n + 2:
-            break
-    return idx, path
-
-
-def burn_segment(seg: Dict):
-    if seg["kind"] == "prize":
-        st.session_state.burned_prizes.add(seg["label"])
-    else:
-        st.session_state.burned_specials.add(seg["id"])
-
-
-def assign_prize(player: str, prize_label: str):
-    st.session_state.assignments[player] = prize_label
-    st.session_state.burned_prizes.add(prize_label)
-
-
-def remaining_prizes_count() -> int:
-    return len([p for p in st.session_state.prizes if p not in st.session_state.burned_prizes])
-
-
-def game_finished() -> bool:
-    return remaining_prizes_count() == 0
-
-
-# ----------------------------
-# Special effects
-# ----------------------------
-def apply_special(seg: Dict, player: str):
-    code = seg["id"]
-    prizes_avail = [p for p in st.session_state.prizes if p not in st.session_state.burned_prizes]
-    if not prizes_avail:
-        return
-
-    if code == "BONUS_2PICK":
-        a = random.choice(prizes_avail)
-        b_pool = [x for x in prizes_avail if x != a]
-        b = random.choice(b_pool) if b_pool else a
-        st.session_state.pending_effect = {"type": "pick_one", "player": player, "options": [a, b], "title": "BONUS: scegli tra due"}
-        return
-
-    if code == "MALUS_WORST2":
-        a = random.choice(prizes_avail)
-        b_pool = [x for x in prizes_avail if x != a]
-        b = random.choice(b_pool) if b_pool else a
-        # “peggiore” = numero più alto se sono numeri, altrimenti seconda opzione
-        def key(x):
-            try:
-                return int(x)
-            except Exception:
-                return 10**9
-        worst = max([a, b], key=key)
-        st.session_state.pending_effect = {"type": "forced", "player": player, "prize": worst, "title": "MALUS: prendi il peggiore di due"}
-        return
-
-    if code == "MALUS_SKIP":
-        st.session_state.skip_next.add(player)
-        st.session_state.pending_effect = {"type": "info", "title": "MALUS", "message": "Al tuo prossimo giro salti il turno."}
-        return
-
-    if code == "BONUS_SWAP":
-        targets = [pl for pl in st.session_state.assignments.keys() if pl != player]
-        if not targets:
-            # fallback: come bonus 2pick
-            a = random.choice(prizes_avail)
-            b_pool = [x for x in prizes_avail if x != a]
-            b = random.choice(b_pool) if b_pool else a
-            st.session_state.pending_effect = {"type": "pick_one", "player": player, "options": [a, b], "title": "BONUS: scegli tra due"}
-            return
-        st.session_state.pending_effect = {"type": "swap", "player": player, "targets": targets, "title": "BONUS: scambio"}
-        return
-
-    st.session_state.pending_effect = {"type": "info", "title": "Slot speciale", "message": "Nessun effetto configurato."}
-
-
-# ----------------------------
-# UI
-# ----------------------------
-init_state()
-
-st.title("🎁 Ruota Regali")
-st.caption("Stile casino, luci lampeggianti, audio da file, premi e bonus/malus bruciabili con salto automatico sugli spicchi bruciati.")
-
-with st.sidebar:
-    st.header("Setup")
-
-    names_txt = st.text_area("Partecipanti (uno per riga)", value="\n".join(st.session_state.players), height=200)
-    prizes_txt = st.text_area("Premi (uno per riga)", value="\n".join(st.session_state.prizes), height=200)
-
-    c1, c2 = st.columns(2)
-    with c1:
-        if st.button("Nuova partita", use_container_width=True):
-            players = [x.strip() for x in names_txt.splitlines() if x.strip()]
-            prizes = [x.strip() for x in prizes_txt.splitlines() if x.strip()]
-            if not players:
-                players = [f"Player {i}" for i in range(1, 11)]
-            if not prizes:
-                prizes = [str(i) for i in range(1, 11)]
-            reset_game(players, prizes)
-            st.rerun()
-
-    with c2:
-        if st.button("Spegni musica", use_container_width=True):
-            st.session_state.music_enabled = False
-            st.rerun()
-
-    st.divider()
-    st.subheader("Audio (file)")
-
-    bgm_up = st.file_uploader("Musica di sottofondo (mp3)", type=["mp3", "wav", "ogg"])
-    spin_up = st.file_uploader("Suono spin (mp3)", type=["mp3", "wav", "ogg"])
-
-    if bgm_up is not None:
-        st.session_state.bgm_bytes = bgm_up.read()
-    if spin_up is not None:
-        st.session_state.spin_bytes = spin_up.read()
-
-    if st.button("Attiva musica", use_container_width=True):
-        st.session_state.music_enabled = True
-
-    st.caption("Se non carichi file qui, la app prova a usare assets/bgm.mp3 e assets/spin.mp3 nel repo.")
-
-
-# Audio playback
-bgm_bytes = st.session_state.bgm_bytes or read_file_bytes(DEFAULT_BGM_PATH)
-spin_bytes = st.session_state.spin_bytes or read_file_bytes(DEFAULT_SPIN_SFX_PATH)
-
-if st.session_state.music_enabled and bgm_bytes:
-    st.audio(bgm_bytes, loop=True)
-
-if st.session_state.last_audio_event == "spin" and spin_bytes:
-    st.audio(spin_bytes)
-    st.session_state.last_audio_event = None
-
-
-# Layout principale
-left, right = st.columns([1.35, 1])
-
-segs = build_segments()
-n = len(segs)
-
-with left:
-    st.subheader("Ruota")
-
-    wheel_placeholder = st.empty()
-
-    # Rendering iniziale
-    wheel_html = render_wheel_html(segs, st.session_state.wheel_rotation, highlight_index=None, big=True)
-    wheel_placeholder.markdown("", unsafe_allow_html=True)
-    components.html(wheel_html, height=760, scrolling=False)
-
-    st.divider()
-    st.subheader("Turno")
-
-    pl = current_player()
-
-    if pl in st.session_state.assignments:
-        st.info(f"{pl} ha già preso: {st.session_state.assignments[pl]}")
-        if st.button("Vai al prossimo", use_container_width=True):
-            advance_player()
-            st.rerun()
-
-    elif pl in st.session_state.skip_next:
-        st.warning(f"{pl} deve saltare questo turno.")
-        if st.button("Conferma salto turno", use_container_width=True):
-            st.session_state.skip_next.remove(pl)
-            advance_player()
-            st.rerun()
-
-    else:
-        st.write(f"Tocca a: **{pl}**")
-        st.caption("Se esce uno spicchio bruciato, la ruota scorre allo spicchio successivo finché trova uno valido.")
-
-        # Gestione effetti pendenti
-        pe = st.session_state.pending_effect
-        if pe is not None:
-            st.success(pe.get("title", "Evento"))
-
-            if pe["type"] == "pick_one":
-                opts = pe["options"]
-                choice = st.radio("Scegli", opts, horizontal=True)
-                if st.button("Conferma", type="primary", use_container_width=True):
-                    assign_prize(pe["player"], choice)
-                    st.session_state.pending_effect = None
-                    advance_player()
-                    st.rerun()
-
-            elif pe["type"] == "forced":
-                prize = pe["prize"]
-                st.write(f"Ti tocca: **{prize}**")
-                if st.button("Accetta", type="primary", use_container_width=True):
-                    assign_prize(pe["player"], prize)
-                    st.session_state.pending_effect = None
-                    advance_player()
-                    st.rerun()
-
-            elif pe["type"] == "swap":
-                target = st.selectbox("Con chi vuoi scambiare", pe["targets"])
-                if st.button("Esegui scambio", type="primary", use_container_width=True):
-                    stolen = st.session_state.assignments[target]
-                    del st.session_state.assignments[target]
-                    assign_prize(pe["player"], stolen)
-                    st.session_state.pending_effect = {"type": "info", "title": "Scambio effettuato", "message": f"{target} torna senza premio e rigira al suo turno."}
-                    advance_player()
-                    st.rerun()
-
-            else:
-                st.write(pe.get("message", ""))
-                if st.button("Continua", use_container_width=True):
-                    st.session_state.pending_effect = None
-                    advance_player()
-                    st.rerun()
-
-        else:
-            disabled = game_finished()
-            if st.button("🎡 SPIN", type="primary", use_container_width=True, disabled=disabled):
-                st.session_state.last_audio_event = "spin"
-
-                # 1) scegli index casuale, anche se bruciato
-                start_idx = pick_start_index(n)
-                final_idx, skipped = next_unburned_index(segs, start_idx)
-
-                # 2) animazione: prima fermata sullo start, poi “passi” sugli altri se bruciati
-                path = [start_idx] + [(x + 1) % n for x in skipped]  # include scorrimenti
-                # dedup consecutivo
-                compact = []
-                for x in path:
-                    if not compact or compact[-1] != x:
-                        compact.append(x)
-
-                # animazione in step
-                for step_i, idx in enumerate(compact):
-                    target_rot = compute_target_rotation_for_index(idx, n, extra_spins=BASE_SPINS if step_i == 0 else 0)
-                    st.session_state.wheel_rotation += target_rot
-
-                    wheel_html_step = render_wheel_html(segs, st.session_state.wheel_rotation, highlight_index=idx, big=True)
-                    components.html(wheel_html_step, height=760, scrolling=False)
-
-                    # pausa per rendere visibile il “salto”
-                    time.sleep(0.55 if step_i == 0 else 0.28)
-
-                # 3) applica esito sul final_idx
-                seg = segs[final_idx]
-                if is_burned(seg["id"]):
-                    # fallback di sicurezza
-                    st.warning("Tutti gli spicchi sembrano bruciati.")
-                else:
-                    # brucia subito bonus/malus quando usati
-                    burn_segment(seg)
-
-                    if seg["kind"] == "prize":
-                        assign_prize(pl, seg["label"])
-                        advance_player()
-                    else:
-                        apply_special(seg, pl)
-
-                st.rerun()
-
-
-with right:
-    st.subheader("Stato")
-
-    st.metric("Premi rimasti", remaining_prizes_count())
-    st.metric("Premi assegnati", len(st.session_state.assignments))
-    st.divider()
-
-    st.write("**Premi assegnati**")
-    rows = []
-    for p in st.session_state.players:
-        rows.append({"Giocatore": p, "Premio": st.session_state.assignments.get(p, ""), "Stato": "✅" if p in st.session_state.assignments else "⏳"})
-    st.dataframe(rows, use_container_width=True, hide_index=True)
-
-    st.divider()
-    st.write("**Bruciati**")
-    st.write("Premi:", ", ".join(sorted(list(st.session_state.burned_prizes), key=lambda x: int(x) if str(x).isdigit() else 9999)) or "nessuno")
-    st.write("Bonus/Malus:", ", ".join(sorted(list(st.session_state.burned_specials))) or "nessuno")
-
-    if game_finished():
-        st.success("Partita finita!")
+      const t = targets[Math.floor(Math.random() * targets.length)];
+      const tmp = assignments[t];
+      assignments[t] = assignments[player] ? assignments[player] : "";
+      assignments[player] = tmp;
+      return;
+    }}
+  }}
+
+  async function spin() {{
+    const player = players[playerIdx];
+
+    if (assignments[player]) {{
+      advancePlayer();
+      updateUI();
+      return;
+    }}
+
+    if (skipNext.has(player)) {{
+      skipNext.delete(player);
+      advancePlayer();
+      updateUI();
+      return;
+    }}
+
+    spinBtn.disabled = true;
+
+    try {{
+      bgm.volume = bgm.volume || 0.7;
+      fadeAudioTo(bgm, 0.0, 350);
+    }} catch (e) {{}}
+
+    playSpinAudio10s();
+
+    const startIdx = pickStartIndex();
+    const {{ finalIdx, skippedPath }} = nextUnburnedIndex(startIdx);
+
+    renderLabels(null);
+    face.style.background = buildGradient();
+
+    const targetRot = computeRotationForIndex(startIdx, 7);
+    rotation = rotation + targetRot;
+
+    wheel.style.transition = "transform 10s cubic-bezier(0.10, 0.75, 0.10, 1)";
+    wheel.style.transform = `rotate(${{rotation}}deg)`;
+
+    await new Promise(resolve => setTimeout(resolve, 10000));
+
+    // “passa allo spicchio successivo” se bruciato, con piccoli scatti
+    let idx = startIdx;
+    let safety = 0;
+    while (isBurned(segs[idx].id)) {{
+      renderLabels(idx);
+      idx = (idx + 1) % segs.length;
+
+      const nudge = computeRotationForIndex(idx, 0);
+      rotation = (Math.floor(rotation / 360) * 360) + nudge;
+
+      wheel.style.transition = "transform 280ms ease";
+      wheel.style.transform = `rotate(${{rotation}}deg)`;
+
+      await new Promise(resolve => setTimeout(resolve, 300));
+      safety++;
+      if (safety > segs.length + 2) break;
+    }}
+
+    // idx è il primo non bruciato
+    renderLabels(idx);
+
+    const seg = segs[idx];
+    burnSegment(seg);
+
+    // aggiorna grafica wheel: grigio su bruciati
+    face.style.background = buildGradient();
+    renderLabels(idx);
+
+    if (seg.kind === "prize") {{
+      assignments[player] = seg.label;
+      await playGiftAudio();
+      showGiftAnimation(seg.label);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      advancePlayer();
+    }} else {{
+      // special: bruciato ma niente pacco premio
+      applySpecial(seg, player);
+      advancePlayer();
+    }}
+
+    // fade in bgm
+    try {{
+      fadeAudioTo(bgm, 0.7, 450);
+      bgm.play().catch(() => {{}});
+    }} catch (e) {{}}
+
+    updateUI();
+    spinBtn.disabled = prizes.filter(x => !burnedPrizes.has(x)).length === 0 ? true : false;
+  }}
+
+  function init() {{
+    renderRimBulbs();
+    face.style.background = buildGradient();
+    renderLabels(null);
+    updateUI();
+
+    // prova autoplay bgm
+    try {{
+      bgm.volume = 0.7;
+      bgm.play().catch(() => {{}});
+    }} catch (e) {{}}
+
+    spinBtn.addEventListener("click", () => {{
+      // spesso questo click sblocca audio autoplay
+      try {{ bgm.play().catch(() => {{}}); }} catch (e) {{}}
+      spin();
+    }});
+  }}
+
+  init();
+}})();
+</script>
+"""
+
+components.html(html, height=980, scrolling=False)
 
