@@ -1050,17 +1050,17 @@ html = f"""
     .stage {{ grid-template-columns: 1fr; }}
   }}
 
-  #overlayStart{
+  #overlayStart{{
     opacity: 1 !important;
     pointer-events: auto !important;
     z-index: 20000 !important;
-  }
+  }}
 
   /* Quando lo nascondiamo via JS mettiamo la classe hidden */
-  #overlayStart.hidden{
+  #overlayStart.hidden{{
     opacity: 0 !important;
     pointer-events: none !important;
-  }
+  }}
 </style>
 
 <script>
