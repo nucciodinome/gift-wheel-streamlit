@@ -85,7 +85,6 @@ JS = r"""
   const burnedMalusEl = document.getElementById("burnedMalus");
   const assignmentsEl = document.getElementById("assignments");
 
-
   const overlayGift = document.getElementById("overlayGift");
   const giftCard = document.getElementById("giftCard");
   const giftNum = document.getElementById("giftNum");
@@ -120,17 +119,9 @@ JS = r"""
   const burnedMalus = new Set();
   const assignments = {};
 
-  // malus 1: spostare target dopo il successivo turno (non subito)
   let pendingReorderAfterNextFor = null;
-
-  // overlay state
   let overlayLock = false;
-
-  // active malus
   let activeMalusId = null;
-
-  // gating start
-  let started = true;
 
   const sliceDeg = 360 / segs.length;
 
@@ -146,7 +137,7 @@ JS = r"""
   function segColor(i, seg) {
     if (isBurned(seg.id)) return "#7A7A7A";
     if (seg.kind === "prize") return (i % 2 === 0) ? "#B51E1E" : "#F4E2C6";
-    return "#D8A83A"; // malus oro
+    return "#D8A83A";
   }
 
   function buildGradient() {
@@ -159,12 +150,11 @@ JS = r"""
     return `conic-gradient(from -90deg, ${stops.join(", ")})`;
   }
 
-  // Label dentro lo spicchio, orientati sul raggio, mai capovolti
   function renderLabels(activeIndex = null) {
     labels.innerHTML = "";
 
-    const r = 210;       // distanza dal centro
-    const baseRot = -90; // allineamento con conic-gradient
+    const r = 210;
+    const baseRot = -90;
 
     segs.forEach((seg, i) => {
       const angleDeg = (i + 0.5) * sliceDeg + baseRot;
@@ -175,7 +165,6 @@ JS = r"""
       if (activeIndex !== null && i === activeIndex) div.classList.add("active");
 
       div.textContent = (seg.kind === "malus") ? "IMPREVISTO" : `PREMIO ${seg.label}`;
-
       div.style.transform =
         `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-${r}px) rotate(90deg)`;
 
@@ -324,7 +313,6 @@ JS = r"""
     updateUI();
   }
 
-  // Turn advance robusto basato su nome (evita bug con reorder)
   function advanceTurnFrom(lastPlayerName) {
     const idx = players.indexOf(lastPlayerName);
     const base = (idx >= 0) ? idx : playerIdxTurn;
@@ -338,7 +326,6 @@ JS = r"""
     players.push(p);
   }
 
-  // Malus 1: spostare target subito dopo chi ha appena giocato (ma SOLO dopo il turno successivo)
   function applyPendingReorderAfterNext(justPlayedPlayer) {
     if (!pendingReorderAfterNextFor) return;
 
@@ -383,7 +370,6 @@ JS = r"""
 
     const player = currentPlayer();
 
-    // se ha già premio: passa al prossimo
     if (assignments[player]) {
       advanceTurnFrom(player);
       updateUI();
@@ -392,13 +378,11 @@ JS = r"""
 
     spinBtn.disabled = true;
 
-    // fade out bgm
     try {
       bgm.volume = (typeof bgm.volume === "number") ? bgm.volume : 0.7;
       fadeAudioTo(bgm, 0.0, 350);
     } catch (e) {}
 
-    // audio spin 6s
     playSpinAudio();
 
     face.style.background = buildGradient();
@@ -436,30 +420,20 @@ JS = r"""
       return;
     }
 
-    // MALUS
     await playMalusAudio();
     showMalusOverlay(seg);
 
-    // Effetti malus
-    if (seg.id === "MALUS_1") {
-      pendingReorderAfterNextFor = player;
-    }
-
-    if (seg.id === "MALUS_3") {
-      movePlayerToEnd(player);
-    }
+    if (seg.id === "MALUS_1") pendingReorderAfterNextFor = player;
+    if (seg.id === "MALUS_3") movePlayerToEnd(player);
   }
 
-  // OK Premio
   giftOk.addEventListener("click", () => {
     stopAudio(giftSfx);
 
     const justPlayed = currentPlayer();
-
     hideGiftOverlay();
 
     applyPendingReorderAfterNext(justPlayed);
-
     advanceTurnFrom(justPlayed);
 
     try {
@@ -470,13 +444,11 @@ JS = r"""
     updateUI();
   });
 
-  // OK Malus
   malusOk.addEventListener("click", () => {
     stopAudio(malusSfx);
 
     const justPlayed = currentPlayer();
 
-    // malus2: assegna pacco scelto e brucia
     if (activeMalusId === "MALUS_2") {
       const raw = (packPick.value || "").trim();
       const n = parseInt(raw, 10);
@@ -501,7 +473,6 @@ JS = r"""
 
     hideMalusOverlay();
 
-    // malus4: altro tentativo, non avanza turno
     if (activeMalusId === "MALUS_4") {
       try {
         fadeAudioTo(bgm, 0.7, 450);
@@ -512,7 +483,6 @@ JS = r"""
     }
 
     applyPendingReorderAfterNext(justPlayed);
-
     advanceTurnFrom(justPlayed);
 
     try {
@@ -523,7 +493,6 @@ JS = r"""
     updateUI();
   });
 
-  // Init
   function init() {
     renderBulbs();
     face.style.background = buildGradient();
@@ -531,39 +500,27 @@ JS = r"""
     updateUI();
 
     spinBtn.addEventListener("click", () => {
-      // questo click sblocca audio nei browser
+      // click utente: sblocca audio
       try {
         bgm.volume = 0.7;
         bgm.play().catch(() => {});
       } catch (e) {}
-  
       spin();
-    });
-  }
-    
-    // Listener anche su tutta la card (clic ovunque per iniziare)
-    overlayStart.addEventListener("click", (e) => {
-      // se clicchi dentro la startCard o sul backdrop, parte lo stesso
-      startGame();
     });
   }
 
   init();
 })();
 """
+
+# Iniettiamo le immagini malus nel JS
 JS = JS.replace("__MALUS1_B64__", b64s["malus1"])
 JS = JS.replace("__MALUS2_B64__", b64s["malus2"])
 JS = JS.replace("__MALUS3_B64__", b64s["malus3"])
 JS = JS.replace("__MALUS4_B64__", b64s["malus4"])
 
-JS_ESC = JS.replace("{", "{{").replace("}", "}}")
-
 html = f"""
 <div id="app">
-
-  <!-- Overlay START -->
-
-
   <div class="topbar">
     <div class="title">🎁 Ruota Regali</div>
     <div class="turn" id="turnLabel">Turno: Player 1</div>
@@ -681,7 +638,6 @@ html = f"""
     margin: 0 auto;
   }}
 
-  /* Pointer più bello, punta verso il basso */
   .pointer {{
     position: absolute;
     top: -0.5%;
@@ -720,7 +676,6 @@ html = f"""
     pointer-events: none;
   }}
 
-  /* Lampadine */
   .bulb {{
     position: absolute;
     top: 50%;
@@ -773,7 +728,6 @@ html = f"""
     pointer-events: none;
   }}
 
-  /* Label: dentro lo spicchio e orientati sul raggio */
   .seg-label {{
     position:absolute;
     top:50%;
@@ -858,7 +812,6 @@ html = f"""
   .assignments .p {{ font-weight: 900; }}
   .assignments .v {{ opacity: 0.9; }}
 
-  /* Overlay */
   .overlay {{
     position: fixed;
     inset: 0;
@@ -894,7 +847,6 @@ html = f"""
     100% {{ transform: scale(1.00); opacity: 1; }}
   }}
 
-  /* Gift full height */
   .card.fullscreen {{
     width: 100vw;
     height: 100vh;
@@ -922,7 +874,6 @@ html = f"""
     background: transparent;
   }}
 
-  /* Numero sul pacco, 2.5x */
   .num {{
     position: absolute;
     inset: 0;
@@ -997,57 +948,13 @@ html = f"""
     outline: none;
   }}
 
-  /* Start overlay */
-  .startCard {{
-    display: grid;
-    gap: 14px;
-    place-items: center;
-    padding: 26px;
-    border-radius: 22px;
-    background: rgba(17, 26, 46, 0.90);
-    border: 1px solid rgba(255,255,255,0.10);
-    box-shadow: 0 34px 90px rgba(0,0,0,0.60);
-    width: min(720px, 92vw);
-  }}
-
-  .startBtn {{
-    width: 100%;
-    font-size: clamp(34px, 5vw, 64px);
-    font-weight: 1000;
-    padding: 22px 22px;
-    border-radius: 20px;
-    border: 0;
-    cursor: pointer;
-    background: linear-gradient(180deg, #F3C35A 0%, #C58B19 100%);
-    color: #23180A;
-    box-shadow: 0 18px 34px rgba(0,0,0,0.45);
-  }}
-
-  .startSub {{
-    opacity: 0.9;
-    font-weight: 800;
-    text-align: center;
-  }}
-
   @media (max-width: 980px) {{
     .stage {{ grid-template-columns: 1fr; }}
-  }}
-
-  #overlayStart{{
-    opacity: 1 !important;
-    pointer-events: auto !important;
-    z-index: 20000 !important;
-  }}
-
-  /* Quando lo nascondiamo via JS mettiamo la classe hidden */
-  #overlayStart.hidden{{
-    opacity: 0 !important;
-    pointer-events: none !important;
   }}
 </style>
 
 <script>
-{JS_ESC}
+{JS}
 </script>
 """
 
