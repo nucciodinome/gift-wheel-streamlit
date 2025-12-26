@@ -540,9 +540,8 @@ JS = r"""
     startBtn.addEventListener("click", async () => {
       started = true;
 
-      overlayStart.classList.remove("show");
+      overlayStart.classList.add("hidden");
       overlayStart.setAttribute("aria-hidden", "true");
-
       try {
         bgm.volume = 0.7;
         await bgm.play();
@@ -1049,6 +1048,18 @@ html = f"""
   @media (max-width: 980px) {{
     .stage {{ grid-template-columns: 1fr; }}
   }}
+
+  #overlayStart{
+    opacity: 1 !important;
+    pointer-events: auto !important;
+    z-index: 20000 !important;
+  }
+
+  /* Quando lo nascondiamo via JS mettiamo la classe hidden */
+  #overlayStart.hidden{
+    opacity: 0 !important;
+    pointer-events: none !important;
+  }
 </style>
 
 <script>
