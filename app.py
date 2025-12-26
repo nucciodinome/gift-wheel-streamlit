@@ -85,8 +85,6 @@ JS = r"""
   const burnedMalusEl = document.getElementById("burnedMalus");
   const assignmentsEl = document.getElementById("assignments");
 
-  const overlayStart = document.getElementById("overlayStart");
-  const startBtn = document.getElementById("startBtn");
 
   const overlayGift = document.getElementById("overlayGift");
   const giftCard = document.getElementById("giftCard");
@@ -132,7 +130,7 @@ JS = r"""
   let activeMalusId = null;
 
   // gating start
-  let started = false;
+  let started = true;
 
   const sliceDeg = 360 / segs.length;
 
@@ -216,7 +214,7 @@ JS = r"""
     });
     assignmentsEl.innerHTML = rows.join("");
 
-    spinBtn.disabled = (!started) || overlayLock || (remainingPrizes() === 0);
+    spinBtn.disabled = overlayLock || (remainingPrizes() === 0);
   }
 
   function burnSegment(seg) {
@@ -381,7 +379,6 @@ JS = r"""
   }
 
   async function spin() {
-    if (!started) return;
     if (overlayLock) return;
 
     const player = currentPlayer();
@@ -532,38 +529,15 @@ JS = r"""
     face.style.background = buildGradient();
     renderLabels(null);
 
-    started = false;
-    spinBtn.disabled = true;
-
-    updateUI();
-
-    async function startGame() {
-      if (started) return;
-      started = true;
-    
-      // rimuovi overlay davvero (non solo opacity)
-      overlayStart.classList.add("hidden");
-      overlayStart.setAttribute("aria-hidden", "true");
-      overlayStart.style.display = "none";
-      try { overlayStart.remove(); } catch (e) {}
-    
-      // sblocca audio
-      try {
-        bgm.volume = 0.7;
-        await bgm.play();
-      } catch (e) {}
-    
-      try { spinSfx.load(); giftSfx.load(); malusSfx.load(); } catch (e) {}
-    
-      updateUI();
-    }
-    
-    // Listener su bottone
-    startBtn.addEventListener("click", (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      startGame();
-    });
+  spinBtn.addEventListener("click", () => {
+    // questo click sblocca audio nei browser
+    try {
+      bgm.volume = 0.7;
+      bgm.play().catch(() => {});
+    } catch (e) {}
+  
+    spin();
+  });
     
     // Listener anche su tutta la card (clic ovunque per iniziare)
     overlayStart.addEventListener("click", (e) => {
@@ -586,12 +560,7 @@ html = f"""
 <div id="app">
 
   <!-- Overlay START -->
-  <div class="overlay show" id="overlayStart" aria-hidden="false">
-    <div class="startCard">
-      <button id="startBtn" class="startBtn">Gira la Ruota</button>
-      <div class="startSub">Tocca per attivare l’audio e iniziare</div>
-    </div>
-  </div>
+
 
   <div class="topbar">
     <div class="title">🎁 Ruota Regali</div>
