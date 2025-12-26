@@ -537,26 +537,38 @@ JS = r"""
 
     updateUI();
 
-    startBtn.addEventListener("click", async () => {
+    async function startGame() {
+      if (started) return;
       started = true;
-
+    
+      // rimuovi overlay davvero (non solo opacity)
       overlayStart.classList.add("hidden");
-      overlayStart.style.display = "none";
       overlayStart.setAttribute("aria-hidden", "true");
+      overlayStart.style.display = "none";
+      try { overlayStart.remove(); } catch (e) {}
+    
+      // sblocca audio
       try {
         bgm.volume = 0.7;
         await bgm.play();
       } catch (e) {}
-
+    
       try { spinSfx.load(); giftSfx.load(); malusSfx.load(); } catch (e) {}
-
+    
       updateUI();
+    }
+    
+    // Listener su bottone
+    startBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      startGame();
     });
-
-    spinBtn.addEventListener("click", () => {
-      if (!started) return;
-      try { bgm.play().catch(() => {}); } catch (e) {}
-      spin();
+    
+    // Listener anche su tutta la card (clic ovunque per iniziare)
+    overlayStart.addEventListener("click", (e) => {
+      // se clicchi dentro la startCard o sul backdrop, parte lo stesso
+      startGame();
     });
   }
 
