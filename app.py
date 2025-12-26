@@ -38,8 +38,549 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
+JS = r"""
+(() => {
+  // -----------------------------
+  // Config gioco
+  // -----------------------------
+  const players = Array.from({length: 10}, (_, i) => `Player ${i+1}`);
+
+  // 10 premi + 4 imprevisti equidistanti
+  const prizes = Array.from({length: 10}, (_, i) => String(i+1));
+
+  const malusDefs = [
+    { id: "MALUS_1", label: "IMPREVISTO", kind: "malus", img: "malus1" },
+    { id: "MALUS_2", label: "IMPREVISTO", kind: "malus", img: "malus2" },
+    { id: "MALUS_3", label: "IMPREVISTO", kind: "malus", img: "malus3" },
+    { id: "MALUS_4", label: "IMPREVISTO", kind: "malus", img: "malus4" },
+  ];
+
+  // 14 spicchi totali con 4 malus quasi equidistanti
+  const malusPositions = new Set([0, 3, 7, 10]);
+  const segs = [];
+  let prizeIdx = 0;
+  let malusIdx = 0;
+  for (let i = 0; i < 14; i++) {
+    if (malusPositions.has(i)) {
+      segs.push(malusDefs[malusIdx++]);
+    } else {
+      const p = prizes[prizeIdx++];
+      segs.push({ id: `PRIZE_${p}`, label: p, kind: "prize" });
+    }
+  }
+
+  const bulbsCount = 32;
+  const spinSeconds = 6;
+
+  // -----------------------------
+  // DOM
+  // -----------------------------
+  const wheel = document.getElementById("wheel");
+  const face = document.getElementById("face");
+  const labels = document.getElementById("labels");
+  const rim = document.getElementById("rim");
+  const spinBtn = document.getElementById("spinBtn");
+  const turnLabel = document.getElementById("turnLabel");
+  const remainingEl = document.getElementById("remaining");
+  const burnedMalusEl = document.getElementById("burnedMalus");
+  const assignmentsEl = document.getElementById("assignments");
+
+  const overlayStart = document.getElementById("overlayStart");
+  const startBtn = document.getElementById("startBtn");
+
+  const overlayGift = document.getElementById("overlayGift");
+  const giftCard = document.getElementById("giftCard");
+  const giftNum = document.getElementById("giftNum");
+  const giftOk = document.getElementById("giftOk");
+
+  const overlayMalus = document.getElementById("overlayMalus");
+  const malusCard = document.getElementById("malusCard");
+  const malusImg = document.getElementById("malusImg");
+  const malusOk = document.getElementById("malusOk");
+  const packPickWrap = document.getElementById("packPickWrap");
+  const packPick = document.getElementById("packPick");
+
+  const bgm = document.getElementById("bgm");
+  const spinSfx = document.getElementById("spinSfx");
+  const giftSfx = document.getElementById("giftSfx");
+  const malusSfx = document.getElementById("malusSfx");
+
+  const malusImgMap = {
+    "malus1": "data:image/png;base64,__MALUS1_B64__",
+    "malus2": "data:image/png;base64,__MALUS2_B64__",
+    "malus3": "data:image/png;base64,__MALUS3_B64__",
+    "malus4": "data:image/png;base64,__MALUS4_B64__",
+  };
+
+  // -----------------------------
+  // Stato gioco
+  // -----------------------------
+  let rotation = 0;
+  let playerIdxTurn = 0;
+
+  const burnedPrizes = new Set();
+  const burnedMalus = new Set();
+  const assignments = {};
+
+  // malus 1: spostare target dopo il successivo turno (non subito)
+  let pendingReorderAfterNextFor = null;
+
+  // overlay state
+  let overlayLock = false;
+
+  // active malus
+  let activeMalusId = null;
+
+  // gating start
+  let started = false;
+
+  const sliceDeg = 360 / segs.length;
+
+  function stopAudio(a) {
+    try { a.pause(); a.currentTime = 0; } catch (e) {}
+  }
+
+  function isBurned(id) {
+    if (id.startsWith("PRIZE_")) return burnedPrizes.has(id.split("_")[1]);
+    return burnedMalus.has(id);
+  }
+
+  function segColor(i, seg) {
+    if (isBurned(seg.id)) return "#7A7A7A";
+    if (seg.kind === "prize") return (i % 2 === 0) ? "#B51E1E" : "#F4E2C6";
+    return "#D8A83A"; // malus oro
+  }
+
+  function buildGradient() {
+    const stops = segs.map((seg, i) => {
+      const c = segColor(i, seg);
+      const a0 = i * sliceDeg;
+      const a1 = (i + 1) * sliceDeg;
+      return `${c} ${a0}deg ${a1}deg`;
+    });
+    return `conic-gradient(from -90deg, ${stops.join(", ")})`;
+  }
+
+  // Label dentro lo spicchio, orientati sul raggio, mai capovolti
+  function renderLabels(activeIndex = null) {
+    labels.innerHTML = "";
+
+    const r = 210;       // distanza dal centro
+    const baseRot = -90; // allineamento con conic-gradient
+
+    segs.forEach((seg, i) => {
+      const angleDeg = (i + 0.5) * sliceDeg + baseRot;
+
+      const div = document.createElement("div");
+      div.className = "seg-label";
+      if (isBurned(seg.id)) div.classList.add("burned");
+      if (activeIndex !== null && i === activeIndex) div.classList.add("active");
+
+      div.textContent = (seg.kind === "malus") ? "IMPREVISTO" : `PREMIO ${seg.label}`;
+
+      div.style.transform =
+        `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-${r}px) rotate(90deg)`;
+
+      labels.appendChild(div);
+    });
+  }
+
+  function renderBulbs() {
+    rim.innerHTML = "";
+    for (let i = 0; i < bulbsCount; i++) {
+      const b = document.createElement("div");
+      b.className = "bulb " + (i % 2 === 0 ? "a" : "b");
+      const ang = 360 * i / bulbsCount;
+      b.style.transform = `rotate(${ang}deg) translateY(-49%)`;
+      rim.appendChild(b);
+    }
+  }
+
+  function currentPlayer() {
+    return players[playerIdxTurn];
+  }
+
+  function remainingPrizes() {
+    return prizes.filter(x => !burnedPrizes.has(x)).length;
+  }
+
+  function updateUI() {
+    turnLabel.textContent = `Turno: ${currentPlayer()}`;
+    remainingEl.textContent = String(remainingPrizes());
+    burnedMalusEl.textContent = String(burnedMalus.size);
+
+    const rows = players.map(pl => {
+      const val = assignments[pl] ? assignments[pl] : "";
+      const state = assignments[pl] ? "✅" : "⏳";
+      return `<div class="row"><div class="p">${pl}</div><div class="v">${state} ${val}</div></div>`;
+    });
+    assignmentsEl.innerHTML = rows.join("");
+
+    spinBtn.disabled = (!started) || overlayLock || (remainingPrizes() === 0);
+  }
+
+  function burnSegment(seg) {
+    if (seg.kind === "prize") burnedPrizes.add(seg.label);
+    else burnedMalus.add(seg.id);
+  }
+
+  function fadeAudioTo(audio, target, ms) {
+    try {
+      const start = audio.volume;
+      const delta = target - start;
+      const steps = Math.max(1, Math.floor(ms / 16));
+      let i = 0;
+      const timer = setInterval(() => {
+        i++;
+        audio.volume = Math.max(0, Math.min(1, start + delta * (i / steps)));
+        if (i >= steps) clearInterval(timer);
+      }, 16);
+    } catch (e) {}
+  }
+
+  function computeRotationForIndex(index, extraSpins) {
+    const center = (index + 0.5) * sliceDeg;
+    const base = (360 - center) % 360;
+    return extraSpins * 360 + base;
+  }
+
+  function pickStartIndex() {
+    return Math.floor(Math.random() * segs.length);
+  }
+
+  async function playSpinAudio() {
+    try {
+      spinSfx.currentTime = 0;
+      await spinSfx.play();
+      setTimeout(() => stopAudio(spinSfx), spinSeconds * 1000);
+    } catch (e) {}
+  }
+
+  async function playGiftAudio() {
+    try {
+      giftSfx.currentTime = 0;
+      await giftSfx.play();
+    } catch (e) {}
+  }
+
+  async function playMalusAudio() {
+    try {
+      malusSfx.currentTime = 0;
+      await malusSfx.play();
+    } catch (e) {}
+  }
+
+  function showGiftOverlay(prizeLabel) {
+    overlayLock = true;
+    spinBtn.disabled = true;
+
+    giftNum.textContent = prizeLabel;
+
+    overlayGift.classList.add("show");
+    giftCard.classList.remove("pop");
+    void giftCard.offsetWidth;
+    giftCard.classList.add("pop");
+
+    giftOk.disabled = true;
+    setTimeout(() => { giftOk.disabled = false; }, 12000);
+  }
+
+  function hideGiftOverlay() {
+    overlayGift.classList.remove("show");
+    giftCard.classList.remove("pop");
+    overlayLock = false;
+    updateUI();
+  }
+
+  function showMalusOverlay(malusSeg) {
+    overlayLock = true;
+    spinBtn.disabled = true;
+
+    activeMalusId = malusSeg.id;
+    malusImg.src = malusImgMap[malusSeg.img];
+
+    overlayMalus.classList.add("show");
+    malusCard.classList.remove("pop");
+    void malusCard.offsetWidth;
+    malusCard.classList.add("pop");
+
+    packPickWrap.style.display = "none";
+    packPick.value = "";
+
+    malusOk.disabled = true;
+
+    setTimeout(() => {
+      malusOk.disabled = false;
+      if (malusSeg.id === "MALUS_2") {
+        packPickWrap.style.display = "grid";
+        packPick.focus();
+      }
+    }, 12000);
+  }
+
+  function hideMalusOverlay() {
+    overlayMalus.classList.remove("show");
+    malusCard.classList.remove("pop");
+    packPickWrap.style.display = "none";
+    overlayLock = false;
+    updateUI();
+  }
+
+  // Turn advance robusto basato su nome (evita bug con reorder)
+  function advanceTurnFrom(lastPlayerName) {
+    const idx = players.indexOf(lastPlayerName);
+    const base = (idx >= 0) ? idx : playerIdxTurn;
+    playerIdxTurn = (base + 1) % players.length;
+  }
+
+  function movePlayerToEnd(playerName) {
+    const i = players.indexOf(playerName);
+    if (i < 0) return;
+    const p = players.splice(i, 1)[0];
+    players.push(p);
+  }
+
+  // Malus 1: spostare target subito dopo chi ha appena giocato (ma SOLO dopo il turno successivo)
+  function applyPendingReorderAfterNext(justPlayedPlayer) {
+    if (!pendingReorderAfterNextFor) return;
+
+    const target = pendingReorderAfterNextFor;
+    pendingReorderAfterNextFor = null;
+
+    const idxJust = players.indexOf(justPlayedPlayer);
+    const idxTarget = players.indexOf(target);
+    if (idxJust < 0 || idxTarget < 0) return;
+
+    const p = players.splice(idxTarget, 1)[0];
+    const idxJustNow = players.indexOf(justPlayedPlayer);
+    const insertAt = Math.min(players.length, idxJustNow + 1);
+    players.splice(insertAt, 0, p);
+  }
+
+  async function resolveBurnedByNudging(startIdx) {
+    let idx = startIdx;
+    let safety = 0;
+
+    while (isBurned(segs[idx].id)) {
+      renderLabels(idx);
+
+      idx = (idx + 1) % segs.length;
+
+      const nudge = computeRotationForIndex(idx, 0);
+      rotation = (Math.floor(rotation / 360) * 360) + nudge;
+
+      wheel.style.transition = "transform 280ms ease";
+      wheel.style.transform = `rotate(${rotation}deg)`;
+
+      await new Promise(r => setTimeout(r, 300));
+
+      safety++;
+      if (safety > segs.length + 2) break;
+    }
+    return idx;
+  }
+
+  async function spin() {
+    if (!started) return;
+    if (overlayLock) return;
+
+    const player = currentPlayer();
+
+    // se ha già premio: passa al prossimo
+    if (assignments[player]) {
+      advanceTurnFrom(player);
+      updateUI();
+      return;
+    }
+
+    spinBtn.disabled = true;
+
+    // fade out bgm
+    try {
+      bgm.volume = (typeof bgm.volume === "number") ? bgm.volume : 0.7;
+      fadeAudioTo(bgm, 0.0, 350);
+    } catch (e) {}
+
+    // audio spin 6s
+    playSpinAudio();
+
+    face.style.background = buildGradient();
+    renderLabels(null);
+
+    const startIdx = pickStartIndex();
+    const targetRot = computeRotationForIndex(startIdx, 8);
+    rotation = rotation + targetRot;
+
+    wheel.style.transition = `transform ${spinSeconds}s cubic-bezier(0.10, 0.75, 0.10, 1)`;
+    wheel.style.transform = `rotate(${rotation}deg)`;
+
+    await new Promise(r => setTimeout(r, spinSeconds * 1000));
+
+    const finalIdx = await resolveBurnedByNudging(startIdx);
+
+    renderLabels(finalIdx);
+
+    const seg = segs[finalIdx];
+    if (isBurned(seg.id)) {
+      fadeAudioTo(bgm, 0.7, 450);
+      updateUI();
+      return;
+    }
+
+    burnSegment(seg);
+
+    face.style.background = buildGradient();
+    renderLabels(finalIdx);
+
+    if (seg.kind === "prize") {
+      assignments[player] = seg.label;
+      await playGiftAudio();
+      showGiftOverlay(seg.label);
+      return;
+    }
+
+    // MALUS
+    await playMalusAudio();
+    showMalusOverlay(seg);
+
+    // Effetti malus
+    if (seg.id === "MALUS_1") {
+      pendingReorderAfterNextFor = player;
+    }
+
+    if (seg.id === "MALUS_3") {
+      movePlayerToEnd(player);
+    }
+  }
+
+  // OK Premio
+  giftOk.addEventListener("click", () => {
+    stopAudio(giftSfx);
+
+    const justPlayed = currentPlayer();
+
+    hideGiftOverlay();
+
+    applyPendingReorderAfterNext(justPlayed);
+
+    advanceTurnFrom(justPlayed);
+
+    try {
+      fadeAudioTo(bgm, 0.7, 450);
+      bgm.play().catch(() => {});
+    } catch (e) {}
+
+    updateUI();
+  });
+
+  // OK Malus
+  malusOk.addEventListener("click", () => {
+    stopAudio(malusSfx);
+
+    const justPlayed = currentPlayer();
+
+    // malus2: assegna pacco scelto e brucia
+    if (activeMalusId === "MALUS_2") {
+      const raw = (packPick.value || "").trim();
+      const n = parseInt(raw, 10);
+
+      if (!Number.isFinite(n) || n < 1 || n > 10) {
+        alert("Inserisci un numero pacco valido (1-10).");
+        return;
+      }
+
+      const pack = String(n);
+      if (burnedPrizes.has(pack)) {
+        alert("Quel pacco è già bruciato. Scegline un altro.");
+        return;
+      }
+
+      assignments[justPlayed] = pack;
+      burnedPrizes.add(pack);
+
+      face.style.background = buildGradient();
+      renderLabels(null);
+    }
+
+    hideMalusOverlay();
+
+    // malus4: altro tentativo, non avanza turno
+    if (activeMalusId === "MALUS_4") {
+      try {
+        fadeAudioTo(bgm, 0.7, 450);
+        bgm.play().catch(() => {});
+      } catch (e) {}
+      updateUI();
+      return;
+    }
+
+    applyPendingReorderAfterNext(justPlayed);
+
+    advanceTurnFrom(justPlayed);
+
+    try {
+      fadeAudioTo(bgm, 0.7, 450);
+      bgm.play().catch(() => {});
+    } catch (e) {}
+
+    updateUI();
+  });
+
+  // Init
+  function init() {
+    renderBulbs();
+    face.style.background = buildGradient();
+    renderLabels(null);
+
+    started = false;
+    spinBtn.disabled = true;
+
+    updateUI();
+
+    startBtn.addEventListener("click", async () => {
+      started = true;
+
+      overlayStart.classList.remove("show");
+      overlayStart.setAttribute("aria-hidden", "true");
+
+      try {
+        bgm.volume = 0.7;
+        await bgm.play();
+      } catch (e) {}
+
+      try { spinSfx.load(); giftSfx.load(); malusSfx.load(); } catch (e) {}
+
+      updateUI();
+    });
+
+    spinBtn.addEventListener("click", () => {
+      if (!started) return;
+      try { bgm.play().catch(() => {}); } catch (e) {}
+      spin();
+    });
+  }
+
+  init();
+})();
+"""
+JS = JS.replace("__MALUS1_B64__", b64s["malus1"])
+JS = JS.replace("__MALUS2_B64__", b64s["malus2"])
+JS = JS.replace("__MALUS3_B64__", b64s["malus3"])
+JS = JS.replace("__MALUS4_B64__", b64s["malus4"])
+
+JS_ESC = JS.replace("{", "{{").replace("}", "}}")
+
 html = f"""
 <div id="app">
+
+  <!-- Overlay START -->
+  <div class="overlay show" id="overlayStart" aria-hidden="false">
+    <div class="startCard">
+      <button id="startBtn" class="startBtn">Gira la Ruota</button>
+      <div class="startSub">Tocca per attivare l’audio e iniziare</div>
+    </div>
+  </div>
+
   <div class="topbar">
     <div class="title">🎁 Ruota Regali</div>
     <div class="turn" id="turnLabel">Turno: Player 1</div>
@@ -81,7 +622,7 @@ html = f"""
     </div>
   </div>
 
-  <!-- Overlay malus -->
+  <!-- Overlay malus (senza countdown visibile) -->
   <div class="overlay" id="overlayMalus" aria-hidden="true">
     <div class="card" id="malusCard">
       <div class="imgwrap">
@@ -95,7 +636,6 @@ html = f"""
         </div>
 
         <button class="ok" id="malusOk" disabled>OK</button>
-        <div class="hint" id="malusHint">OK disponibile tra <span id="malusCountdown">12</span>s</div>
       </div>
     </div>
   </div>
@@ -454,17 +994,6 @@ html = f"""
     z-index: 10001;
   }}
 
-  .hint {{
-    opacity: 0.9;
-    font-weight: 800;
-    background: rgba(255,255,255,0.06);
-    border: 1px solid rgba(255,255,255,0.08);
-    padding: 10px 12px;
-    border-radius: 14px;
-    flex: 1;
-    min-width: 220px;
-  }}
-
   .left-pack {{
     display: grid;
     gap: 6px;
@@ -485,530 +1014,45 @@ html = f"""
     outline: none;
   }}
 
+  /* Start overlay */
+  .startCard {{
+    display: grid;
+    gap: 14px;
+    place-items: center;
+    padding: 26px;
+    border-radius: 22px;
+    background: rgba(17, 26, 46, 0.90);
+    border: 1px solid rgba(255,255,255,0.10);
+    box-shadow: 0 34px 90px rgba(0,0,0,0.60);
+    width: min(720px, 92vw);
+  }}
+
+  .startBtn {{
+    width: 100%;
+    font-size: clamp(34px, 5vw, 64px);
+    font-weight: 1000;
+    padding: 22px 22px;
+    border-radius: 20px;
+    border: 0;
+    cursor: pointer;
+    background: linear-gradient(180deg, #F3C35A 0%, #C58B19 100%);
+    color: #23180A;
+    box-shadow: 0 18px 34px rgba(0,0,0,0.45);
+  }}
+
+  .startSub {{
+    opacity: 0.9;
+    font-weight: 800;
+    text-align: center;
+  }}
+
   @media (max-width: 980px) {{
     .stage {{ grid-template-columns: 1fr; }}
   }}
 </style>
 
 <script>
-(() => {
-  // -----------------------------
-  // Config gioco
-  // -----------------------------
-  const players = Array.from({length: 10}, (_, i) => `Player ${i+1}`);
-
-  // 10 premi + 4 imprevisti equidistanti
-  const prizes = Array.from({length: 10}, (_, i) => String(i+1));
-
-  const malusDefs = [
-    { id: "MALUS_1", label: "IMPREVISTO", kind: "malus", img: "malus1" },
-    { id: "MALUS_2", label: "IMPREVISTO", kind: "malus", img: "malus2" },
-    { id: "MALUS_3", label: "IMPREVISTO", kind: "malus", img: "malus3" },
-    { id: "MALUS_4", label: "IMPREVISTO", kind: "malus", img: "malus4" },
-  ];
-
-  // 14 spicchi totali con 4 malus quasi equidistanti
-  const malusPositions = new Set([0, 3, 7, 10]);
-  const segs = [];
-  let prizeIdx = 0;
-  let malusIdx = 0;
-  for (let i = 0; i < 14; i++) {
-    if (malusPositions.has(i)) {
-      segs.push(malusDefs[malusIdx++]);
-    } else {
-      const p = prizes[prizeIdx++];
-      segs.push({ id: `PRIZE_${p}`, label: p, kind: "prize" });
-    }
-  }
-
-  const bulbsCount = 32;
-  const spinSeconds = 6;
-
-  // -----------------------------
-  // DOM
-  // -----------------------------
-  const wheel = document.getElementById("wheel");
-  const face = document.getElementById("face");
-  const labels = document.getElementById("labels");
-  const rim = document.getElementById("rim");
-  const spinBtn = document.getElementById("spinBtn");
-  const turnLabel = document.getElementById("turnLabel");
-  const remainingEl = document.getElementById("remaining");
-  const burnedMalusEl = document.getElementById("burnedMalus");
-  const assignmentsEl = document.getElementById("assignments");
-
-  const overlayGift = document.getElementById("overlayGift");
-  const giftCard = document.getElementById("giftCard");
-  const giftNum = document.getElementById("giftNum");
-  const giftOk = document.getElementById("giftOk");
-
-  const overlayMalus = document.getElementById("overlayMalus");
-  const malusCard = document.getElementById("malusCard");
-  const malusImg = document.getElementById("malusImg");
-  const malusOk = document.getElementById("malusOk");
-  const malusCountdown = document.getElementById("malusCountdown");
-  const packPickWrap = document.getElementById("packPickWrap");
-  const packPick = document.getElementById("packPick");
-
-  const bgm = document.getElementById("bgm");
-  const spinSfx = document.getElementById("spinSfx");
-  const giftSfx = document.getElementById("giftSfx");
-  const malusSfx = document.getElementById("malusSfx");
-
-  const malusImgMap = {
-    "malus1": "data:image/png;base64,{b64s["malus1"]}",
-    "malus2": "data:image/png;base64,{b64s["malus2"]}",
-    "malus3": "data:image/png;base64,{b64s["malus3"]}",
-    "malus4": "data:image/png;base64,{b64s["malus4"]}",
-  };
-
-  // -----------------------------
-  // Stato gioco
-  // -----------------------------
-  let rotation = 0;
-  let playerIdxTurn = 0;
-
-  const burnedPrizes = new Set();
-  const burnedMalus = new Set();
-  const assignments = {};
-
-  // malus 1: spostare target dopo il successivo turno (non subito)
-  let pendingReorderAfterNextFor = null;
-
-  // overlay state
-  let overlayLock = false;
-
-  // active malus
-  let activeMalusId = null;
-
-  const sliceDeg = 360 / segs.length;
-
-  function stopAudio(a) {
-    try { a.pause(); a.currentTime = 0; } catch (e) {}
-  }
-
-  function isBurned(id) {
-    if (id.startsWith("PRIZE_")) return burnedPrizes.has(id.split("_")[1]);
-    return burnedMalus.has(id);
-  }
-
-  function segColor(i, seg) {
-    if (isBurned(seg.id)) return "#7A7A7A";
-    if (seg.kind === "prize") return (i % 2 === 0) ? "#B51E1E" : "#F4E2C6";
-    return "#D8A83A"; // malus oro
-  }
-
-  function buildGradient() {
-    const stops = segs.map((seg, i) => {
-      const c = segColor(i, seg);
-      const a0 = i * sliceDeg;
-      const a1 = (i + 1) * sliceDeg;
-      return `${c} ${a0}deg ${a1}deg`;
-    });
-    return `conic-gradient(from -90deg, ${stops.join(", ")})`;
-  }
-
-  // Label dentro lo spicchio, orientati sul raggio, mai capovolti
-  function renderLabels(activeIndex = null) {
-    labels.innerHTML = "";
-
-    const r = 210;       // distanza dal centro
-    const baseRot = -90; // allineamento con conic-gradient
-
-    segs.forEach((seg, i) => {
-      const angleDeg = (i + 0.5) * sliceDeg + baseRot;
-
-      const div = document.createElement("div");
-      div.className = "seg-label";
-      if (isBurned(seg.id)) div.classList.add("burned");
-      if (activeIndex !== null && i === activeIndex) div.classList.add("active");
-
-      div.textContent = (seg.kind === "malus") ? "IMPREVISTO" : `PREMIO ${seg.label}`;
-
-      // centro, ruota sul raggio, vai verso l'esterno, ruota 90 per leggere lungo raggio
-      div.style.transform =
-        `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-${r}px) rotate(90deg)`;
-
-      labels.appendChild(div);
-    });
-  }
-
-  function renderBulbs() {
-    rim.innerHTML = "";
-    for (let i = 0; i < bulbsCount; i++) {
-      const b = document.createElement("div");
-      b.className = "bulb " + (i % 2 === 0 ? "a" : "b");
-      const ang = 360 * i / bulbsCount;
-      b.style.transform = `rotate(${ang}deg) translateY(-49%)`;
-      rim.appendChild(b);
-    }
-  }
-
-  function currentPlayer() {
-    return players[playerIdxTurn];
-  }
-
-  function remainingPrizes() {
-    return prizes.filter(x => !burnedPrizes.has(x)).length;
-  }
-
-  function updateUI() {
-    turnLabel.textContent = `Turno: ${currentPlayer()}`;
-    remainingEl.textContent = String(remainingPrizes());
-    burnedMalusEl.textContent = String(burnedMalus.size);
-
-    const rows = players.map(pl => {
-      const val = assignments[pl] ? assignments[pl] : "";
-      const state = assignments[pl] ? "✅" : "⏳";
-      return `<div class="row"><div class="p">${pl}</div><div class="v">${state} ${val}</div></div>`;
-    });
-    assignmentsEl.innerHTML = rows.join("");
-
-    spinBtn.disabled = overlayLock || (remainingPrizes() === 0);
-  }
-
-  function burnSegment(seg) {
-    if (seg.kind === "prize") burnedPrizes.add(seg.label);
-    else burnedMalus.add(seg.id);
-  }
-
-  function fadeAudioTo(audio, target, ms) {
-    try {
-      const start = audio.volume;
-      const delta = target - start;
-      const steps = Math.max(1, Math.floor(ms / 16));
-      let i = 0;
-      const timer = setInterval(() => {
-        i++;
-        audio.volume = Math.max(0, Math.min(1, start + delta * (i / steps)));
-        if (i >= steps) clearInterval(timer);
-      }, 16);
-    } catch (e) {}
-  }
-
-  function computeRotationForIndex(index, extraSpins) {
-    const center = (index + 0.5) * sliceDeg;
-    const base = (360 - center) % 360;
-    return extraSpins * 360 + base;
-  }
-
-  function pickStartIndex() {
-    return Math.floor(Math.random() * segs.length);
-  }
-
-  async function playSpinAudio() {
-    try {
-      spinSfx.currentTime = 0;
-      await spinSfx.play();
-      setTimeout(() => stopAudio(spinSfx), spinSeconds * 1000);
-    } catch (e) {}
-  }
-
-  async function playGiftAudio() {
-    try {
-      giftSfx.currentTime = 0;
-      await giftSfx.play();
-    } catch (e) {}
-  }
-
-  async function playMalusAudio() {
-    try {
-      malusSfx.currentTime = 0;
-      await malusSfx.play();
-    } catch (e) {}
-  }
-
-  function showGiftOverlay(prizeLabel) {
-    overlayLock = true;
-    spinBtn.disabled = true;
-
-    giftNum.textContent = prizeLabel;
-
-    overlayGift.classList.add("show");
-    giftCard.classList.remove("pop");
-    void giftCard.offsetWidth;
-    giftCard.classList.add("pop");
-
-    giftOk.disabled = true;
-    setTimeout(() => { giftOk.disabled = false; }, 12000);
-  }
-
-  function hideGiftOverlay() {
-    overlayGift.classList.remove("show");
-    giftCard.classList.remove("pop");
-    overlayLock = false;
-    updateUI();
-  }
-
-  function showMalusOverlay(malusSeg) {
-    overlayLock = true;
-    spinBtn.disabled = true;
-
-    activeMalusId = malusSeg.id;
-    malusImg.src = malusImgMap[malusSeg.img];
-
-    overlayMalus.classList.add("show");
-    malusCard.classList.remove("pop");
-    void malusCard.offsetWidth;
-    malusCard.classList.add("pop");
-
-    packPickWrap.style.display = "none";
-    packPick.value = "";
-
-    malusOk.disabled = true;
-    let t = 12;
-    malusCountdown.textContent = String(t);
-
-    const timer = setInterval(() => {
-      t -= 1;
-      malusCountdown.textContent = String(Math.max(0, t));
-      if (t <= 0) {
-        clearInterval(timer);
-        malusOk.disabled = false;
-        if (malusSeg.id === "MALUS_2") {
-          packPickWrap.style.display = "grid";
-          packPick.focus();
-        }
-      }
-    }, 1000);
-  }
-
-  function hideMalusOverlay() {
-    overlayMalus.classList.remove("show");
-    malusCard.classList.remove("pop");
-    packPickWrap.style.display = "none";
-    overlayLock = false;
-    updateUI();
-  }
-
-  // Turn advance robusto basato su nome (evita bug con reorder)
-  function advanceTurnFrom(lastPlayerName) {
-    const idx = players.indexOf(lastPlayerName);
-    const base = (idx >= 0) ? idx : playerIdxTurn;
-    playerIdxTurn = (base + 1) % players.length;
-  }
-
-  function movePlayerToEnd(playerName) {
-    const i = players.indexOf(playerName);
-    if (i < 0) return;
-    const p = players.splice(i, 1)[0];
-    players.push(p);
-  }
-
-  // Malus 1: spostare target subito dopo chi ha appena giocato (ma SOLO dopo il turno successivo)
-  function applyPendingReorderAfterNext(justPlayedPlayer) {
-    if (!pendingReorderAfterNextFor) return;
-
-    const target = pendingReorderAfterNextFor;
-    pendingReorderAfterNextFor = null;
-
-    const idxJust = players.indexOf(justPlayedPlayer);
-    const idxTarget = players.indexOf(target);
-    if (idxJust < 0 || idxTarget < 0) return;
-
-    // rimuovi target e inseriscilo subito dopo justPlayed
-    const p = players.splice(idxTarget, 1)[0];
-
-    // se idxTarget < idxJust, idxJust si riduce di 1 dopo splice
-    const idxJustNow = players.indexOf(justPlayedPlayer);
-    const insertAt = Math.min(players.length, idxJustNow + 1);
-    players.splice(insertAt, 0, p);
-  }
-
-  async function resolveBurnedByNudging(startIdx) {
-    let idx = startIdx;
-    let safety = 0;
-
-    while (isBurned(segs[idx].id)) {
-      renderLabels(idx);
-
-      idx = (idx + 1) % segs.length;
-
-      const nudge = computeRotationForIndex(idx, 0);
-      rotation = (Math.floor(rotation / 360) * 360) + nudge;
-
-      wheel.style.transition = "transform 280ms ease";
-      wheel.style.transform = `rotate(${rotation}deg)`;
-
-      await new Promise(r => setTimeout(r, 300));
-
-      safety++;
-      if (safety > segs.length + 2) break;
-    }
-    return idx;
-  }
-
-  async function spin() {
-    if (overlayLock) return;
-
-    const player = currentPlayer();
-
-    // se ha già premio: passa al prossimo
-    if (assignments[player]) {
-      advanceTurnFrom(player);
-      updateUI();
-      return;
-    }
-
-    spinBtn.disabled = true;
-
-    // fade out bgm
-    try {
-      bgm.volume = (typeof bgm.volume === "number") ? bgm.volume : 0.7;
-      fadeAudioTo(bgm, 0.0, 350);
-    } catch (e) {}
-
-    // audio spin 6s
-    playSpinAudio();
-
-    face.style.background = buildGradient();
-    renderLabels(null);
-
-    const startIdx = pickStartIndex();
-    const targetRot = computeRotationForIndex(startIdx, 8);
-    rotation = rotation + targetRot;
-
-    wheel.style.transition = `transform ${spinSeconds}s cubic-bezier(0.10, 0.75, 0.10, 1)`;
-    wheel.style.transform = `rotate(${rotation}deg)`;
-
-    await new Promise(r => setTimeout(r, spinSeconds * 1000));
-
-    const finalIdx = await resolveBurnedByNudging(startIdx);
-
-    renderLabels(finalIdx);
-
-    const seg = segs[finalIdx];
-    if (isBurned(seg.id)) {
-      fadeAudioTo(bgm, 0.7, 450);
-      updateUI();
-      return;
-    }
-
-    burnSegment(seg);
-
-    face.style.background = buildGradient();
-    renderLabels(finalIdx);
-
-    if (seg.kind === "prize") {
-      assignments[player] = seg.label;
-      await playGiftAudio();
-      showGiftOverlay(seg.label);
-      return;
-    }
-
-    // MALUS
-    await playMalusAudio();
-    showMalusOverlay(seg);
-
-    // Effetti malus
-    if (seg.id === "MALUS_1") {
-      pendingReorderAfterNextFor = player;
-    }
-
-    if (seg.id === "MALUS_3") {
-      movePlayerToEnd(player);
-    }
-
-    // malus4: altro tentativo, gestito al click OK (non avanza turno)
-  }
-
-  // OK Premio
-  giftOk.addEventListener("click", () => {
-    stopAudio(giftSfx);
-
-    const justPlayed = currentPlayer();
-
-    hideGiftOverlay();
-
-    // Se esiste un pending (malus1), si applica qui perché questo turno è "quello successivo"
-    applyPendingReorderAfterNext(justPlayed);
-
-    // Avanza al prossimo, nel nuovo ordine
-    advanceTurnFrom(justPlayed);
-
-    try {
-      fadeAudioTo(bgm, 0.7, 450);
-      bgm.play().catch(() => {});
-    } catch (e) {}
-
-    updateUI();
-  });
-
-  // OK Malus
-  malusOk.addEventListener("click", () => {
-    stopAudio(malusSfx);
-
-    const justPlayed = currentPlayer();
-
-    // malus2: assegna pacco scelto e brucia
-    if (activeMalusId === "MALUS_2") {
-      const raw = (packPick.value || "").trim();
-      const n = parseInt(raw, 10);
-
-      if (!Number.isFinite(n) || n < 1 || n > 10) {
-        alert("Inserisci un numero pacco valido (1-10).");
-        return;
-      }
-
-      const pack = String(n);
-      if (burnedPrizes.has(pack)) {
-        alert("Quel pacco è già bruciato. Scegline un altro.");
-        return;
-      }
-
-      assignments[justPlayed] = pack;
-      burnedPrizes.add(pack);
-
-      face.style.background = buildGradient();
-      renderLabels(null);
-    }
-
-    hideMalusOverlay();
-
-    // malus4: altro tentativo, non avanza turno
-    if (activeMalusId === "MALUS_4") {
-      try {
-        fadeAudioTo(bgm, 0.7, 450);
-        bgm.play().catch(() => {});
-      } catch (e) {}
-      updateUI();
-      return;
-    }
-
-    // Se esiste pending (malus1), si applica qui perché questo turno è "quello successivo"
-    applyPendingReorderAfterNext(justPlayed);
-
-    // Avanza turno nel nuovo ordine
-    advanceTurnFrom(justPlayed);
-
-    try {
-      fadeAudioTo(bgm, 0.7, 450);
-      bgm.play().catch(() => {});
-    } catch (e) {}
-
-    updateUI();
-  });
-
-  // Init
-  function init() {
-    renderBulbs();
-    face.style.background = buildGradient();
-    renderLabels(null);
-    updateUI();
-
-    try {
-      bgm.volume = 0.7;
-      bgm.play().catch(() => {});
-    } catch (e) {}
-
-    spinBtn.addEventListener("click", () => {
-      try { bgm.play().catch(() => {}); } catch (e) {}
-      spin();
-    });
-  }
-
-  init();
-})();
+{JS_ESC}
 </script>
 """
 
