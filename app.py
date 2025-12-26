@@ -541,6 +541,7 @@ JS = r"""
       started = true;
 
       overlayStart.classList.add("hidden");
+      overlayStart.style.display = "none";
       overlayStart.setAttribute("aria-hidden", "true");
       try {
         bgm.volume = 0.7;
