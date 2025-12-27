@@ -226,12 +226,10 @@ JS = r"""
     } catch (e) {}
   }
 
-  function computeRotationForIndex(index, extraSpins) {
-      const center = (index + 0.5) * sliceDeg;   // gradi dal primo spicchio
-      const baseRot = -90;                       // stesso di buildGradient
-      // voglio che (baseRot + center + rot) % 360 == 0 (spicchio centrato sotto il puntatore)
-      const rotToTop = (360 + (0 - (baseRot + center))) % 360;
-      return extraSpins * 360 + rotToTop;
+  function computeRotationForIndex(index, extraSpinsIgnored) {
+    const center = (index + 0.5) * sliceDeg;
+    const baseRot = -90;
+    return (360 + (0 - (baseRot + center))) % 360;
   }
 
   function pickStartIndex() {
@@ -399,8 +397,18 @@ JS = r"""
     renderLabels(null);
 
     const startIdx = pickStartIndex();
-    const targetRot = computeRotationForIndex(startIdx, 8);
-    rotation = rotation + targetRot;
+    const extraSpins = 8;
+    
+    // dove sei ora (mod 360)
+    const currentMod = ((rotation % 360) + 360) % 360;
+    
+    // dove vuoi arrivare (mod 360)
+    const targetMod = computeRotationForIndex(startIdx, 0);
+    
+    // delta minimo per arrivare al target
+    const delta = (360 + targetMod - currentMod) % 360;
+    
+    rotation = rotation + extraSpins * 360 + delta;
 
     wheel.style.transition = `transform ${spinSeconds}s cubic-bezier(0.10, 0.75, 0.10, 1)`;
     wheel.style.transform = `rotate(${rotation}deg)`;
@@ -531,6 +539,7 @@ JS = JS.replace("__MALUS1_B64__", b64s["malus1"])
 JS = JS.replace("__MALUS2_B64__", b64s["malus2"])
 JS = JS.replace("__MALUS3_B64__", b64s["malus3"])
 JS = JS.replace("__MALUS4_B64__", b64s["malus4"])
+JS_ESC = JS.replace("{", "{{").replace("}", "}}")
 
 html = f"""
 <div id="app">
@@ -587,9 +596,8 @@ html = f"""
           <div class="packLabel">Numero pacco scelto</div>
           <input id="packPick" class="packInput" inputmode="numeric" placeholder="1-10" />
         </div>
-
-        <button class="ok big" id="malusOk" disabled>OK</button>
       </div>
+      <button class="ok center big" id="malusOk" disabled>OK</button>
     </div>
   </div>
 
@@ -989,7 +997,7 @@ html = f"""
 </style>
 
 <script>
-{JS}
+{JS_ESC}
 </script>
 """
 
