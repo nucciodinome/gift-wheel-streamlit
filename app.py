@@ -3,9 +3,7 @@ import os
 import streamlit as st
 import streamlit.components.v1 as components
 
-# ---------------------------------------------------------
 # 1. SETUP E ASSETS
-# ---------------------------------------------------------
 st.set_page_config(page_title="Ruota Regali", page_icon="🎁", layout="wide")
 
 ASSETS = "assets"
@@ -31,45 +29,23 @@ def b64(path: str) -> str:
 
 b64s = {k: b64(v) for k, v in FILES.items()}
 
-# ---------------------------------------------------------
 # 2. CSS PER STREAMLIT (KIOSK MODE)
-# ---------------------------------------------------------
 st.markdown(
     """
     <style>
-      /* Reset Totale Margini Streamlit */
-      .block-container {
-        padding: 0 !important;
-        margin: 0 !important;
-        max-width: 100% !important;
-      }
+      .block-container { padding: 0 !important; margin: 0 !important; max-width: 100% !important; }
       header, footer, #MainMenu { visibility: hidden; }
-      
-      /* App a tutto schermo senza scroll */
-      .stApp {
-        margin: 0; padding: 0;
-        overflow: hidden;
-        background: #0B1220; /* Colore di sfondo per evitare flash bianchi */
-      }
-      
-      /* Iframe forzato a viewport piena */
-      iframe {
-        height: 100vh !important;
-        width: 100vw !important;
-        display: block;
-        border: none;
-      }
+      .stApp { margin: 0; padding: 0; overflow: hidden; background: #0B1220; }
+      iframe { height: 100vh !important; width: 100vw !important; display: block; border: none; }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------------------------------------------------------
-# 3. LOGICA JAVASCRIPT
-# ---------------------------------------------------------
-JS_RAW = r"""
+# 3. JAVASCRIPT (STRINGA PURA - Nessun escaping necessario qui)
+JS_CODE = r"""
 (() => {
-  // --- CONFIGURAZIONE ---
+  // --- CONFIG ---
   const players = Array.from({length: 10}, (_, i) => `Player ${i+1}`);
   const prizes = Array.from({length: 10}, (_, i) => String(i+1));
 
@@ -136,11 +112,9 @@ JS_RAW = r"""
   let rotation = 0;
   let playerIdxTurn = 0;
   let lastPlayedPlayer = null;
-  
   const burnedPrizes = new Set();
   const burnedMalus = new Set();
   const assignments = {};
-
   let overlayLock = false;
   let activeMalusId = null;
   const sliceDeg = 360 / segs.length;
@@ -162,7 +136,7 @@ JS_RAW = r"""
     } catch (e) {}
   }
 
-  // --- LOGICA GIOCO ---
+  // --- LOGICA ---
   function isBurned(id) {
     if (id.startsWith("PRIZE_")) return burnedPrizes.has(id.split("_")[1]);
     return burnedMalus.has(id);
@@ -197,19 +171,16 @@ JS_RAW = r"""
       
       div.textContent = (seg.kind === "malus") ? "IMPREVISTO" : `PREMIO ${seg.label}`;
       div.style.transform = `translate(-50%, -50%) rotate(${angleDeg}deg) translateY(-${r}px) rotate(90deg)`;
-      
       labels.appendChild(div);
     });
   }
 
-  // PATCH GRAFICA: Bulbi sul bordo esterno
   function renderBulbs() {
     rim.innerHTML = "";
     for (let i = 0; i < bulbsCount; i++) {
       const b = document.createElement("div");
       b.className = "bulb " + (i % 2 === 0 ? "a" : "b");
       const ang = 360 * i / bulbsCount;
-      // Posizione dinamica
       b.style.transform = `rotate(${ang}deg) translateY(calc(-1 * (min(410px, 47vw) - 15px)))`;
       rim.appendChild(b);
     }
@@ -227,11 +198,10 @@ JS_RAW = r"""
       const val = assignments[pl] ? assignments[pl] : "";
       const state = assignments[pl] ? "✅" : "⏳";
       const isCurrent = (pl === currentPlayer()) && !assignments[pl];
-      const style = isCurrent ? "color: #FFD36B; font-weight:bold;" : ""; // Evidenzia turno
+      const style = isCurrent ? "color: #FFD36B; font-weight:bold;" : "";
       return `<div class="row" style="${style}"><div class="p">${pl}</div><div class="v">${state} ${val}</div></div>`;
     });
     assignmentsEl.innerHTML = rows.join("");
-
     spinBtn.disabled = overlayLock || (remainingPrizes() === 0);
   }
 
@@ -249,16 +219,11 @@ JS_RAW = r"""
   function pickStartIndex() { return Math.floor(Math.random() * segs.length); }
 
   async function playSpinAudio() {
-    try {
-      spinSfx.currentTime = 0;
-      await spinSfx.play();
-      setTimeout(() => stopAudio(spinSfx), spinSeconds * 1000);
-    } catch (e) {}
+    try { spinSfx.currentTime = 0; await spinSfx.play(); setTimeout(() => stopAudio(spinSfx), spinSeconds * 1000); } catch (e) {}
   }
   async function playGiftAudio() { try { giftSfx.currentTime=0; await giftSfx.play(); } catch(e){} }
   async function playMalusAudio() { try { malusSfx.currentTime=0; await malusSfx.play(); } catch(e){} }
 
-  // --- GESTIONE TURNI ---
   function advanceTurnFrom(lastPlayerName) {
     const idx = players.indexOf(lastPlayerName);
     const base = (idx >= 0) ? idx : playerIdxTurn;
@@ -272,20 +237,16 @@ JS_RAW = r"""
     players.push(p);
   }
 
-  // --- SPINNING & NUDGING ---
   async function resolveBurnedByNudging(startIdx) {
     let idx = startIdx;
     let safety = 0;
     while (isBurned(segs[idx].id)) {
       renderLabels(idx);
       idx = (idx + 1) % segs.length;
-      
       const nudge = computeRotationForIndex(idx);
       rotation = (Math.trunc(rotation / 360) * 360) + nudge;
-      
       wheel.style.transition = "transform 280ms ease";
       wheel.style.transform = `rotate(${rotation}deg)`;
-      
       await new Promise(r => setTimeout(r, 300));
       safety++;
       if (safety > segs.length + 2) break;
@@ -305,7 +266,6 @@ JS_RAW = r"""
     }
 
     spinBtn.disabled = true;
-
     try { bgm.volume = (typeof bgm.volume === "number") ? bgm.volume : 0.7; fadeAudioTo(bgm, 0.0, 350); } catch (e) {}
     playSpinAudio();
 
@@ -348,22 +308,14 @@ JS_RAW = r"""
     await playMalusAudio();
     showMalusOverlay(seg);
 
-    // --- PATCH LOGICA MALUS 1 ---
-    // Scambia posizione con il successivo. 
-    // Risultato: Gioca il prossimo (che era B), poi tocca di nuovo a chi ha pescato Malus (A).
+    // --- MALUS 1: Scambio + Salto ---
     if (seg.id === "MALUS_1") {
       const currIdx = playerIdxTurn;
       const nextIdx = (playerIdxTurn + 1) % players.length;
-      
-      // Swap fisico array
       const temp = players[currIdx];
       players[currIdx] = players[nextIdx];
       players[nextIdx] = temp;
-      
-      updateUI(); // Mostra subito scambio nomi
-
-      // Trucco: Imposta lastPlayedPlayer a quello "prima" della posizione corrente
-      // così advanceTurnFrom() calcolerà currIdx (che ora contiene B) come prossimo.
+      updateUI();
       const prevIdx = (currIdx - 1 + players.length) % players.length;
       lastPlayedPlayer = players[prevIdx];
     }
@@ -374,17 +326,14 @@ JS_RAW = r"""
     }
   }
 
-  // --- OVERLAYS ---
   function showGiftOverlay(prizeLabel) {
     overlayLock = true;
     spinBtn.disabled = true;
     giftNum.textContent = prizeLabel;
-    
     overlayGift.classList.add("show");
     giftCard.classList.remove("pop");
     void giftCard.offsetWidth;
     giftCard.classList.add("pop");
-
     giftOk.disabled = true;
     setTimeout(() => { giftOk.disabled = false; }, 12000);
   }
@@ -401,16 +350,13 @@ JS_RAW = r"""
     spinBtn.disabled = true;
     activeMalusId = malusSeg.id;
     malusImg.src = malusImgMap[malusSeg.img];
-    
     overlayMalus.classList.add("show");
     malusCard.classList.remove("pop");
     void malusCard.offsetWidth;
     malusCard.classList.add("pop");
-
     packPickWrap.style.display = "none";
     packPick.value = "";
     malusOk.disabled = true;
-
     setTimeout(() => {
       if (malusSeg.id === "MALUS_2") {
         packPickWrap.style.display = "grid";
@@ -428,7 +374,6 @@ JS_RAW = r"""
     updateUI();
   }
 
-  // --- CLICK HANDLERS ---
   giftOk.addEventListener("click", () => {
     stopAudio(giftSfx);
     const justPlayed = lastPlayedPlayer;
@@ -441,35 +386,23 @@ JS_RAW = r"""
   malusOk.addEventListener("click", () => {
     stopAudio(malusSfx);
     const justPlayed = lastPlayedPlayer;
-
     if (activeMalusId === "MALUS_2") {
       const raw = (packPick.value || "").trim();
       const n = parseInt(raw, 10);
-      if (!Number.isFinite(n) || n < 1 || n > 10) {
-        alert("Inserisci un numero pacco valido (1-10).");
-        return;
-      }
+      if (!Number.isFinite(n) || n < 1 || n > 10) { alert("Inserisci un numero pacco valido (1-10)."); return; }
       const pack = String(n);
-      if (burnedPrizes.has(pack)) {
-        alert("Pacco già assegnato.");
-        return;
-      }
+      if (burnedPrizes.has(pack)) { alert("Pacco già assegnato."); return; }
       assignments[justPlayed] = pack;
       burnedPrizes.add(pack);
       face.style.background = buildGradient();
       renderLabels(null);
     }
-
     hideMalusOverlay();
-
     if (activeMalusId === "MALUS_4") {
-      // Gioca di nuovo
       try { fadeAudioTo(bgm, 0.7, 450); bgm.play().catch(() => {}); } catch (e) {}
       updateUI();
       return;
     }
-
-    // Qui scatta il trucco di MALUS 1 se impostato
     advanceTurnFrom(justPlayed);
     try { fadeAudioTo(bgm, 0.7, 450); bgm.play().catch(() => {}); } catch (e) {}
     updateUI();
@@ -490,22 +423,19 @@ JS_RAW = r"""
 })();
 """
 
-JS_FINAL = JS_RAW.replace("__MALUS1_B64__", b64s["malus1"]) \
+# INIEZIONE VARIABILI NEL JS (Senza rompere la sintassi)
+JS_CODE = JS_CODE.replace("__MALUS1_B64__", b64s["malus1"]) \
                  .replace("__MALUS2_B64__", b64s["malus2"]) \
                  .replace("__MALUS3_B64__", b64s["malus3"]) \
                  .replace("__MALUS4_B64__", b64s["malus4"])
-JS_ESC = JS_FINAL.replace("{", "{{").replace("}", "}}")
 
-# ---------------------------------------------------------
-# 4. HTML/CSS STRUTTURA
-# ---------------------------------------------------------
-html_content = f"""
+# 4. HTML STRUTTURA (CON F-STRING PER CSS E IMMAGINI)
+html_struct = f"""
 <div id="app">
   <div class="topbar">
     <div class="title">🎁 Ruota Regali</div>
     <div class="turn" id="turnLabel">Turno: Player 1</div>
   </div>
-
   <div class="stage">
     <div class="wheel-wrap">
       <div class="pointer" title="pointer"></div>
@@ -516,7 +446,6 @@ html_content = f"""
         <div class="hub"></div>
       </div>
     </div>
-
     <div class="controls">
       <button id="spinBtn" class="spin">SPIN</button>
       <div class="meta">
@@ -563,128 +492,63 @@ html_content = f"""
     --bg: #0B1220;
     --panel: rgba(17, 26, 46, 0.78);
     --gold: #E2B24A;
-    --deep-red: #7C1430;
-    --cream: #F4E2C6;
-    --red: #B51E1E;
-    --gray: #7A7A7A;
     --text: #E5E7EB;
   }}
-
-  /* Layout Base */
   html, body {{ margin: 0; padding: 0; width: 100%; height: 100vh; overflow: hidden; background: var(--bg); }}
   #app {{ width: 100%; height: 100%; box-sizing: border-box; display: flex; flex-direction: column; padding: 10px; color: var(--text); font-family: system-ui, sans-serif; }}
-
-  /* Top Bar */
-  .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 10px 14px; background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; backdrop-filter: blur(6px); }}
+  
+  .topbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; padding: 10px 14px; background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; }}
   .title {{ font-weight: 950; font-size: 18px; }}
   .turn {{ font-weight: 900; opacity: 0.95; }}
-
-  /* Stage Grid */
+  
   .stage {{ display: grid; grid-template-columns: 1.25fr 0.75fr; gap: 18px; align-items: start; height: 100%; }}
-
-  /* Wheel Wrap Responsive */
   .wheel-wrap {{ position: relative; width: min(80vh, 80vw); max-width: 800px; aspect-ratio: 1/1; margin: 0 auto; }}
 
-  /* --- STILI ORIGINALI RIPRISTINATI --- */
-  
-  .pointer {{
-    position: absolute; top: -0.5%; left: 50%; transform: translateX(-50%);
-    width: 72px; height: 72px; z-index: 60;
-    filter: drop-shadow(0 10px 10px rgba(0,0,0,0.35));
-  }}
-  .pointer::before {{
-    content: ""; position: absolute; inset: 0; border-radius: 999px;
-    background: radial-gradient(circle at 30% 30%, #FFE9A6 0%, #E2B24A 35%, #A47A1F 70%, #5A3A08 100%);
-    box-shadow: inset 0 0 0 6px rgba(255,255,255,0.12);
-  }}
-  .pointer::after {{
-    content: ""; position: absolute; left: 50%; bottom: -22px; transform: translateX(-50%);
-    width: 0; height: 0; border-left: 18px solid transparent; border-right: 18px solid transparent; border-top: 30px solid var(--gold);
-  }}
-
-  .hub {{
-    position: absolute; inset: 40%; border-radius: 50%;
-    background: radial-gradient(circle at 30% 30%, #FFE9A6 0%, #D8A83A 35%, #A47A1F 70%, #5A3A08 100%);
-    box-shadow: inset 0 0 0 8px rgba(255,255,255,0.12), 0 10px 22px rgba(0,0,0,0.35);
-  }}
-
-  .face {{
-    position: absolute; inset: 0; border-radius: 50%;
-    box-shadow: inset 0 0 0 10px rgba(226, 178, 74, 0.92),
-                inset 0 0 0 16px rgba(124, 20, 48, 0.92),
-                0 24px 44px rgba(0,0,0,0.48);
-  }}
-
-  /* ------------------------------------- */
-
+  /* WHEEL ASSETS */
+  .pointer {{ position: absolute; top: -0.5%; left: 50%; transform: translateX(-50%); width: 72px; height: 72px; z-index: 60; filter: drop-shadow(0 10px 10px rgba(0,0,0,0.35)); }}
+  .pointer::before {{ content: ""; position: absolute; inset: 0; border-radius: 999px; background: radial-gradient(circle at 30% 30%, #FFE9A6 0%, #E2B24A 35%, #A47A1F 70%, #5A3A08 100%); box-shadow: inset 0 0 0 6px rgba(255,255,255,0.12); }}
+  .pointer::after {{ content: ""; position: absolute; left: 50%; bottom: -22px; transform: translateX(-50%); border-left: 18px solid transparent; border-right: 18px solid transparent; border-top: 30px solid var(--gold); }}
+  .hub {{ position: absolute; inset: 40%; border-radius: 50%; background: radial-gradient(circle at 30% 30%, #FFE9A6 0%, #D8A83A 35%, #A47A1F 70%, #5A3A08 100%); box-shadow: inset 0 0 0 8px rgba(255,255,255,0.12), 0 10px 22px rgba(0,0,0,0.35); }}
+  .face {{ position: absolute; inset: 0; border-radius: 50%; box-shadow: inset 0 0 0 10px rgba(226,178,74,0.92), inset 0 0 0 16px rgba(124,20,48,0.92), 0 24px 44px rgba(0,0,0,0.48); }}
   .rim {{ position: absolute; inset: 0; border-radius: 50%; z-index: 8; pointer-events: none; }}
-  
-  .bulb {{
-    position: absolute; top: 50%; left: 50%; width: 13px; height: 13px;
-    margin: -6.5px; border-radius: 50%; transform-origin: 0 0;
-    animation: blink 1.05s infinite;
-  }}
+  .bulb {{ position: absolute; top: 50%; left: 50%; width: 13px; height: 13px; margin: -6.5px; border-radius: 50%; transform-origin: 0 0; animation: blink 1.05s infinite; }}
   .bulb.a {{ background: #FFD36B; box-shadow: 0 0 12px rgba(255, 210, 110, 0.98); }}
   .bulb.b {{ background: #FF6B6B; box-shadow: 0 0 12px rgba(255, 105, 105, 0.92); animation-delay: 0.22s; }}
   @keyframes blink {{ 0%, 100% {{ opacity: 0.35; filter: saturate(0.9); }} 50% {{ opacity: 1; filter: saturate(1.25); }} }}
-
   .wheel {{ position: absolute; inset: 6%; border-radius: 50%; transform: rotate(0deg); z-index: 10; }}
   .labels {{ position: absolute; inset: 0; border-radius: 50%; pointer-events: none; }}
-  
-  .seg-label {{
-    position: absolute; top: 50%; left: 50%; width: auto; max-width: 60%;
-    text-align: center; font-weight: 1000; letter-spacing: 0.02em; text-transform: uppercase;
-    white-space: nowrap; font-size: clamp(12px, 1.6vw, 22px); color: rgba(255,255,255,0.92);
-    text-shadow: 0 3px 4px rgba(0,0,0,0.35); user-select: none;
-  }}
-  .seg-label.active {{ filter: drop-shadow(0 0 10px rgba(255, 240, 170, 0.92)); }}
+  .seg-label {{ position: absolute; top: 50%; left: 50%; text-align: center; font-weight: 1000; color: rgba(255,255,255,0.92); font-size: clamp(12px, 1.6vw, 22px); text-shadow: 0 3px 4px rgba(0,0,0,0.35); white-space: nowrap; }}
   .seg-label.burned {{ color: rgba(255,255,255,0.55); text-shadow: none; }}
 
-  /* Controls Panel */
+  /* UI */
   .controls {{ background: var(--panel); border: 1px solid rgba(255,255,255,0.08); border-radius: 16px; padding: 14px; }}
-  .spin {{ width: 100%; font-size: 22px; font-weight: 1000; padding: 14px 16px; border-radius: 16px; border: 0; cursor: pointer; background: linear-gradient(180deg, #F3C35A 0%, #C58B19 100%); color: #23180A; box-shadow: 0 14px 26px rgba(0,0,0,0.35); }}
-  .spin:disabled {{ opacity: 0.55; cursor: not-allowed; }}
-  .meta {{ display: flex; gap: 10px; margin-top: 12px; flex-wrap: wrap; }}
-  .pill {{ background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.08); padding: 10px 12px; border-radius: 14px; font-weight: 900; }}
-  
-  .assignments {{ margin-top: 12px; font-size: 14px; line-height: 1.35; opacity: 0.95; }}
+  .spin {{ width: 100%; font-size: 22px; font-weight: 1000; padding: 14px; border-radius: 16px; border: 0; cursor: pointer; background: linear-gradient(180deg, #F3C35A, #C58B19); color: #23180A; }}
+  .spin:disabled {{ opacity: 0.5; cursor: not-allowed; }}
+  .meta {{ display: flex; gap: 10px; margin-top: 12px; }}
+  .pill {{ background: rgba(255,255,255,0.06); padding: 10px; border-radius: 14px; font-weight: 900; }}
+  .assignments {{ margin-top: 12px; font-size: 14px; }}
   .assignments .row {{ display: flex; justify-content: space-between; padding: 7px 0; border-bottom: 1px solid rgba(255,255,255,0.06); }}
-  .assignments .row:last-child {{ border: 0; }}
-  .assignments .p {{ font-weight: 900; }}
-  .assignments .v {{ opacity: 0.9; }}
+  .p {{ font-weight: 900; }}
+  .v {{ opacity: 0.9; }}
 
-  /* Overlay & Cards (PATCHED SIZING) */
-  .overlay {{ position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.50); opacity: 0; pointer-events: none; transition: opacity 220ms ease; z-index: 9999; overflow: hidden !important; }}
+  /* OVERLAYS (Fix Dimensioni) */
+  .overlay {{ position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,0.5); opacity: 0; pointer-events: none; z-index: 9999; transition: opacity 0.2s; overflow: hidden !important; }}
   .overlay.show {{ opacity: 1; pointer-events: auto; }}
-
-  .card {{
-    background: rgba(17, 26, 46, 0.95); border: 1px solid rgba(255,255,255,0.10); border-radius: 18px; padding: 20px;
-    width: min(380px, 45vw); box-shadow: 0 34px 90px rgba(0,0,0,0.60);
-    transform: scale(0.85); opacity: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; margin: auto;
-  }}
-  .card.pop {{ animation: popIn 520ms cubic-bezier(0.16, 0.85, 0.18, 1) forwards; }}
-  @keyframes popIn {{ 0% {{ transform: scale(0.70); opacity: 0; }} 70% {{ transform: scale(1.03); opacity: 1; }} 100% {{ transform: scale(1.00); opacity: 1; }} }}
-
-  .card.fullscreen {{ width: min(500px, 50vw) !important; height: auto !important; background: rgba(17, 26, 46, 0.95); border-radius: 18px !important; padding: 30px !important; }}
-  .imgwrap {{ display: flex; justify-content: center; width: 100%; margin-bottom: 15px; position: relative; }}
+  .card {{ background: rgba(17, 26, 46, 0.95); border: 1px solid rgba(255,255,255,0.1); border-radius: 18px; padding: 20px; width: min(380px, 45vw); box-shadow: 0 34px 90px rgba(0,0,0,0.6); transform: scale(0.85); opacity: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
+  .card.pop {{ animation: popIn 0.5s cubic-bezier(0.16, 0.85, 0.18, 1) forwards; }}
+  @keyframes popIn {{ 0% {{ transform: scale(0.7); opacity: 0; }} 100% {{ transform: scale(1); opacity: 1; }} }}
+  .card.fullscreen {{ width: min(500px, 50vw) !important; height: auto !important; padding: 30px !important; }}
+  .imgwrap {{ width: 100%; display: flex; justify-content: center; margin-bottom: 15px; position: relative; }}
   .img {{ max-height: 40vh; object-fit: contain; width: 100%; }}
-  .num {{ position: absolute; inset: 0; display: grid; place-items: center; font-weight: 1000; font-size: clamp(40px, 6vw, 80px); color: #FFE9A6; text-shadow: 0 10px 22px rgba(0,0,0,0.55); -webkit-text-stroke: 2px rgba(0,0,0,0.25); pointer-events: none; }}
-  .num.big {{ font-size: clamp(80px, 10vw, 140px); -webkit-text-stroke: 3px rgba(0,0,0,0.25); }}
-
-  .ok {{ background: linear-gradient(180deg, #F3C35A 0%, #C58B19 100%); color: #23180A; border: 0; border-radius: 14px; padding: 12px 20px; font-weight: 1000; font-size: 16px; cursor: pointer; min-width: 130px; }}
-  .ok:disabled {{ opacity: 0 !important; pointer-events: none !important; }}
-  .ok.big {{ min-width: 180px; padding: 16px 28px; font-size: 20px; }}
-  
-  .row-actions {{ display: flex; align-items: center; justify-content: center; gap: 14px; padding: 12px 8px 6px 8px; }}
-  .left-pack {{ display: grid; gap: 6px; min-width: 200px; }}
-  .packLabel {{ font-weight: 900; opacity: 0.95; }}
-  .packInput {{ border-radius: 12px; border: 1px solid rgba(255,255,255,0.16); background: rgba(0,0,0,0.22); color: var(--text); padding: 12px; font-size: 16px; font-weight: 900; outline: none; }}
+  .num {{ position: absolute; inset: 0; display: grid; place-items: center; font-weight: 1000; font-size: clamp(40px, 6vw, 80px); color: #FFE9A6; -webkit-text-stroke: 2px rgba(0,0,0,0.25); pointer-events: none; }}
+  .num.big {{ font-size: clamp(80px, 10vw, 140px); }}
+  .ok {{ background: linear-gradient(180deg, #F3C35A, #C58B19); color: #23180A; border: 0; border-radius: 14px; padding: 12px 20px; font-weight: 1000; font-size: 16px; cursor: pointer; min-width: 130px; }}
+  .row-actions {{ display: flex; gap: 14px; align-items: center; }}
+  .packInput {{ border-radius: 12px; border: 1px solid rgba(255,255,255,0.16); background: rgba(0,0,0,0.22); color: #FFF; padding: 12px; font-size: 16px; outline: none; }}
 </style>
-
-<script>
-{JS_ESC}
-</script>
 """
 
-# Renderizza a tutto schermo
-components.html(html_content, height=900, scrolling=False)
+# Assemblaggio finale: HTML Head + Script JS (separato) + Chiusura
+full_html = html_struct + "\n<script>\n" + JS_CODE + "\n</script>"
+
+components.html(full_html, height=900, scrolling=False)
