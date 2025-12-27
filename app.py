@@ -114,7 +114,8 @@ JS = r"""
   // -----------------------------
   let rotation = 0;
   let playerIdxTurn = 0;
-
+  let lastPlayedPlayer = null;
+  
   const burnedPrizes = new Set();
   const burnedMalus = new Set();
   const assignments = {};
@@ -226,9 +227,11 @@ JS = r"""
   }
 
   function computeRotationForIndex(index, extraSpins) {
-    const center = (index + 0.5) * sliceDeg;
-    const base = (360 - center) % 360;
-    return extraSpins * 360 + base;
+      const center = (index + 0.5) * sliceDeg;   // gradi dal primo spicchio
+      const baseRot = -90;                       // stesso di buildGradient
+      // voglio che (baseRot + center + rot) % 360 == 0 (spicchio centrato sotto il puntatore)
+      const rotToTop = (360 + (0 - (baseRot + center))) % 360;
+      return extraSpins * 360 + rotToTop;
   }
 
   function pickStartIndex() {
@@ -293,14 +296,20 @@ JS = r"""
 
     packPickWrap.style.display = "none";
     packPick.value = "";
-
+    
+    // nascondo davvero finché disabled (Patch 3)
     malusOk.disabled = true;
-
+    
     setTimeout(() => {
-      malusOk.disabled = false;
       if (malusSeg.id === "MALUS_2") {
+        // dopo 12s: mostra input + ok, affiancati
         packPickWrap.style.display = "grid";
         packPick.focus();
+        malusOk.disabled = false;
+      } else {
+        // altri malus: solo ok dopo 12s
+        packPickWrap.style.display = "none";
+        malusOk.disabled = false;
       }
     }, 12000);
   }
@@ -369,6 +378,7 @@ JS = r"""
     if (overlayLock) return;
 
     const player = currentPlayer();
+    lastPlayedPlayer = player;
 
     if (assignments[player]) {
       advanceTurnFrom(player);
@@ -424,13 +434,16 @@ JS = r"""
     showMalusOverlay(seg);
 
     if (seg.id === "MALUS_1") pendingReorderAfterNextFor = player;
-    if (seg.id === "MALUS_3") movePlayerToEnd(player);
+    if (seg.id === "MALUS_3") {
+      movePlayerToEnd(player);
+      playerIdxTurn = players.indexOf(player);
+    }
   }
 
   giftOk.addEventListener("click", () => {
     stopAudio(giftSfx);
 
-    const justPlayed = currentPlayer();
+    const justPlayed = lastPlayedPlayer;
     hideGiftOverlay();
 
     applyPendingReorderAfterNext(justPlayed);
@@ -447,7 +460,7 @@ JS = r"""
   malusOk.addEventListener("click", () => {
     stopAudio(malusSfx);
 
-    const justPlayed = currentPlayer();
+    const justPlayed = lastPlayedPlayer;
 
     if (activeMalusId === "MALUS_2") {
       const raw = (packPick.value || "").trim();
@@ -558,7 +571,7 @@ html = f"""
         <img class="img fullscreen" id="giftImg" src="data:image/png;base64,{b64s["gift_box"]}" alt="gift"/>
         <div class="num big" id="giftNum">1</div>
       </div>
-      <button class="ok center" id="giftOk" disabled>OK</button>
+      <button class="ok center big" id="giftOk" disabled>OK</button>
     </div>
   </div>
 
@@ -575,7 +588,7 @@ html = f"""
           <input id="packPick" class="packInput" inputmode="numeric" placeholder="1-10" />
         </div>
 
-        <button class="ok" id="malusOk" disabled>OK</button>
+        <button class="ok big" id="malusOk" disabled>OK</button>
       </div>
     </div>
   </div>
@@ -848,22 +861,15 @@ html = f"""
   }}
 
   .card.fullscreen {{
-    width: 100vw;
-    height: 100vh;
-    border-radius: 0;
-    padding: 0;
-    background: rgba(0,0,0,0.55);
-    border: 0;
-    box-shadow: none;
-    transform: scale(1);
+      width: 100% !important;
+      height: 100% !important;
+      border-radius: 0 !important;
+      padding: 0 !important;
+      background: rgba(0,0,0,0.55);
   }}
   .imgwrap.fullscreen {{
-    width: 100%;
-    height: 100%;
-    padding: 0;
-    display: grid;
-    place-items: center;
-    position: relative;
+      width: 100% !important;
+      height: 100% !important;
   }}
   .img.fullscreen {{
     width: 100%;
@@ -893,12 +899,12 @@ html = f"""
   }}
 
   .row-actions {{
-    display: flex;
-    align-items: end;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 10px 8px 4px 8px;
-    flex-wrap: wrap;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      padding: 12px 8px 6px 8px;
+      flex-wrap: nowrap;
   }}
 
   .ok {{
@@ -913,8 +919,8 @@ html = f"""
     min-width: 130px;
   }}
   .ok:disabled {{
-    opacity: 0.55;
-    cursor: not-allowed;
+      opacity: 0 !important;
+      pointer-events: none !important;
   }}
 
   .ok.center {{
@@ -951,6 +957,35 @@ html = f"""
   @media (max-width: 980px) {{
     .stage {{ grid-template-columns: 1fr; }}
   }}
+
+  .ok.big{{
+      min-width: 180px;
+      padding: 16px 28px;
+      font-size: 20px;
+  }}
+
+  html, body {{
+      margin: 0 !important;
+      padding: 0 !important;
+      height: 100% !important;
+      overflow: hidden !important;
+  }}
+
+  #app {{
+      height: 100% !important;
+      overflow: hidden !important;
+  }}
+
+  /* overlay sempre dentro al frame senza scroll */
+  .overlay {{
+      overflow: hidden !important;
+  }}
+
+  #packPickWrap{{
+    display: grid;
+    gap: 6px;
+  }}
+
 </style>
 
 <script>
