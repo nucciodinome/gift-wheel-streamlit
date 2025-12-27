@@ -448,7 +448,28 @@ JS = r"""
     await playMalusAudio();
     showMalusOverlay(seg);
 
-    if (seg.id === "MALUS_1") pendingReorderAfterNextFor = player;
+    if (seg.id === "MALUS_1") {
+      // 1. Identifica indici corrente e successivo
+      const currIdx = playerIdxTurn;
+      const nextIdx = (playerIdxTurn + 1) % players.length;
+
+      // 2. Scambia fisicamente i giocatori nell'array
+      // (Esempio: [A, B, C] diventa [B, A, C])
+      const temp = players[currIdx];
+      players[currIdx] = players[nextIdx];
+      players[nextIdx] = temp;
+
+      // 3. AGGIORNAMENTO UI IMMEDIATO: mostriamo che i nomi si sono invertiti
+      updateUI();
+
+      // 4. TRUCCO LOGICO:
+      // Per far sì che al click su OK il turno vada al giocatore che ora è in posizione currIdx (cioè B),
+      // dobbiamo dire al sistema che l'ultimo a giocare è stato quello *prima* di currIdx.
+      // Così: index(Precedente) + 1 = currIdx.
+      const prevIdx = (currIdx - 1 + players.length) % players.length;
+      lastPlayedPlayer = players[prevIdx];
+    }
+
     if (seg.id === "MALUS_3") {
       movePlayerToEnd(player);
       playerIdxTurn = players.indexOf(player);
