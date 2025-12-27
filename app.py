@@ -27,12 +27,37 @@ def b64(path: str) -> str:
         return base64.b64encode(f.read()).decode("utf-8")
 
 b64s = {k: b64(v) for k, v in FILES.items()}
-
 st.markdown(
     """
     <style>
-      .block-container { padding-top: 1.1rem; padding-bottom: 1.2rem; }
-      header, footer { visibility: hidden; height: 0; }
+      /* Rimuove padding e margini del container principale */
+      .block-container {
+        padding-top: 0rem !important;
+        padding-bottom: 0rem !important;
+        padding-left: 0rem !important;
+        padding-right: 0rem !important;
+        margin: 0 !important;
+        max-width: 100% !important;
+      }
+      
+      /* Nasconde header, footer e menu hamburger */
+      header { visibility: hidden; }
+      #MainMenu { visibility: hidden; }
+      footer { visibility: hidden; }
+      
+      /* Forza l'app a occupare tutta l'altezza */
+      .stApp {
+        margin: 0;
+        padding: 0;
+        overflow: hidden; /* Blocca scroll esterno */
+      }
+      
+      /* Hack per forzare l'iframe a 100vh esatti */
+      iframe {
+        height: 100vh !important;
+        width: 100vw !important;
+        display: block;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -657,6 +682,33 @@ html = f"""
     --text: #E5E7EB;
   }}
 
+  html, body {{
+      margin: 0; 
+      padding: 0;
+      width: 100%;
+      height: 100vh; /* Usa viewport height */
+      overflow: hidden; /* Cruciale: niente scrollbar */
+      background: var(--bg);
+    }}
+
+    #app {{
+      width: 100%;
+      height: 100%; /* Si adatta al body */
+      box-sizing: border-box;
+      display: flex; 
+      flex-direction: column;
+      padding: 10px; /* Un po' di padding interno sicuro */
+    }}
+
+    /* Riduci l'altezza della ruota per schermi piccoli se necessario */
+    .wheel-wrap {{
+      /* Usa vmin per scalare in base al lato più piccolo dello schermo */
+      width: min(80vh, 80vw); 
+      max-width: 800px;
+      aspect-ratio: 1/1;
+      margin: 0 auto;
+    }}
+
   body {{ background: var(--bg); }}
   #app {{ color: var(--text); font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial; }}
 
@@ -679,13 +731,6 @@ html = f"""
     grid-template-columns: 1.25fr 0.75fr;
     gap: 18px;
     align-items: start;
-  }}
-
-  .wheel-wrap {{
-    position: relative;
-    width: min(820px, 94vw);
-    aspect-ratio: 1/1;
-    margin: 0 auto;
   }}
 
   .pointer {{
@@ -1024,17 +1069,7 @@ html = f"""
       font-size: 20px;
   }}
 
-  html, body {{
-      margin: 0 !important;
-      padding: 0 !important;
-      height: 100% !important;
-      overflow: hidden !important;
-  }}
 
-  #app {{
-      height: 100% !important;
-      overflow: hidden !important;
-  }}
 
   /* overlay sempre dentro al frame senza scroll */
   .overlay {{
@@ -1052,5 +1087,4 @@ html = f"""
 {JS}
 </script>
 """
-
-components.html(html, height=980, scrolling=False)
+components.html(html_content, height=900, scrolling=False)
