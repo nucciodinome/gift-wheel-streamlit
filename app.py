@@ -359,7 +359,7 @@ JS = r"""
       idx = (idx + 1) % segs.length;
 
       const nudge = computeRotationForIndex(idx);
-      rotation = (Math.floor(rotation / 360) * 360) + nudge;
+      rotation = (Math.trunc(rotation / 360) * 360) + nudge;
 
       wheel.style.transition = "transform 280ms ease";
       wheel.style.transform = `rotate(${rotation}deg)`;
@@ -998,7 +998,7 @@ html = f"""
 </style>
 
 <script>
-{JS_ESC}
+{JS}
 </script>
 """
 
