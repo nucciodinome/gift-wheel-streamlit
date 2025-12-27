@@ -850,43 +850,57 @@ html = f"""
     pointer-events: auto;
   }}
 
-  .card {{
-    background: rgba(17, 26, 46, 0.92);
-    border: 1px solid rgba(255,255,255,0.10);
-    border-radius: 18px;
-    padding: 14px;
-    width: min(720px, 90vw);
-    box-shadow: 0 34px 90px rgba(0,0,0,0.60);
-    transform: scale(0.85);
-    opacity: 0;
-  }}
   .card.pop {{
     animation: popIn 520ms cubic-bezier(0.16, 0.85, 0.18, 1) forwards;
   }}
+  
   @keyframes popIn {{
     0% {{ transform: scale(0.70); opacity: 0; }}
     70% {{ transform: scale(1.03); opacity: 1; }}
     100% {{ transform: scale(1.00); opacity: 1; }}
   }}
 
-  .card.fullscreen {{
-      width: 100% !important;
-      height: 100% !important;
-      border-radius: 0 !important;
-      padding: 0 !important;
-      background: rgba(0,0,0,0.55);
+  .card {{
+    background: rgba(17, 26, 46, 0.95);
+    border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 18px;
+    padding: 20px;
+    /* RIDOTTO DEL 50% CIRCA */
+    width: min(380px, 45vw); 
+    box-shadow: 0 34px 90px rgba(0,0,0,0.60);
+    transform: scale(0.85);
+    opacity: 0;
+    
+    /* FIX CENTRATURA INTERNA */
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    margin: auto; /* Sicurezza per il grid */
   }}
+
+  /* Rimosso !important su width/height per permettere il resize */
+  .card.fullscreen {{
+      width: min(500px, 50vw) !important; /* Non più full screen totale */
+      height: auto !important;
+      background: rgba(17, 26, 46, 0.95); /* Sfondo scuro per contrasto */
+      border-radius: 18px !important;
+      padding: 30px !important;
+  }}
+
   .imgwrap.fullscreen {{
       width: 100% !important;
-      height: 100% !important;
+      height: auto !important;
+      display: flex;
+      justify-content: center;
+      position: relative;
   }}
+
   .img.fullscreen {{
     width: 100%;
-    height: 100%;
-    max-height: 100vh;
+    height: auto;
+    max-height: 40vh; /* Ridotta altezza immagine premio */
     object-fit: contain;
-    border-radius: 0;
-    background: transparent;
   }}
 
   .num {{
@@ -895,16 +909,25 @@ html = f"""
     display: grid;
     place-items: center;
     font-weight: 1000;
-    font-size: clamp(64px, 9vw, 132px);
+    font-size: clamp(40px, 6vw, 80px); /* Ridotto font */
     color: #FFE9A6;
     text-shadow: 0 10px 22px rgba(0,0,0,0.55);
     letter-spacing: 0.03em;
-    -webkit-text-stroke: 3px rgba(0,0,0,0.25);
+    -webkit-text-stroke: 2px rgba(0,0,0,0.25);
     pointer-events: none;
   }}
+  
   .num.big {{
-    font-size: clamp(160px, 18vw, 330px);
-    -webkit-text-stroke: 5px rgba(0,0,0,0.25);
+    font-size: clamp(80px, 10vw, 140px); /* Ridotto drasticamente */
+    -webkit-text-stroke: 3px rgba(0,0,0,0.25);
+  }}
+
+  /* Aggiunta per centrare l'immagine nel riquadro malus */
+  .imgwrap {{
+    display: flex;
+    justify-content: center;
+    width: 100%;
+    margin-bottom: 15px;
   }}
 
   .row-actions {{
