@@ -174,15 +174,22 @@ JS = r"""
   }
 
   function renderBulbs() {
-    rim.innerHTML = "";
-    for (let i = 0; i < bulbsCount; i++) {
-      const b = document.createElement("div");
-      b.className = "bulb " + (i % 2 === 0 ? "a" : "b");
-      const ang = 360 * i / bulbsCount;
-      b.style.transform = `rotate(${ang}deg) translateY(-49%)`;
-      rim.appendChild(b);
+      rim.innerHTML = "";
+      for (let i = 0; i < bulbsCount; i++) {
+        const b = document.createElement("div");
+        // Aggiungiamo un ritardo casuale per effetto 'intermittenza' più naturale
+        b.className = "bulb " + (i % 2 === 0 ? "a" : "b");
+      
+        const ang = 360 * i / bulbsCount;
+      
+        // FIX: Usiamo calc() per spingere i bulbi sul bordo.
+        // 47vw è circa il raggio della ruota (metà di 94vw) o 410px (metà di 820px).
+        // Il -15px serve a centrarli esattamente sulla cornice nera.
+        b.style.transform = `rotate(${ang}deg) translateY(calc(-1 * (min(410px, 47vw) - 15px)))`;
+        
+        rim.appendChild(b);
+      }
     }
-  }
 
   function currentPlayer() {
     return players[playerIdxTurn];
