@@ -1087,4 +1087,4 @@ html = f"""
 {JS}
 </script>
 """
-components.html(html_content, height=900, scrolling=False)
+components.html(html, height=900, scrolling=False)
