@@ -226,7 +226,7 @@ JS = r"""
     } catch (e) {}
   }
 
-  function computeRotationForIndex(index, extraSpinsIgnored) {
+  function computeRotationForIndex(index) {
     const center = (index + 0.5) * sliceDeg;
     const baseRot = -90;
     return (360 + (0 - (baseRot + center))) % 360;
@@ -358,7 +358,7 @@ JS = r"""
 
       idx = (idx + 1) % segs.length;
 
-      const nudge = computeRotationForIndex(idx, 0);
+      const nudge = computeRotationForIndex(idx);
       rotation = (Math.floor(rotation / 360) * 360) + nudge;
 
       wheel.style.transition = "transform 280ms ease";
@@ -403,7 +403,7 @@ JS = r"""
     const currentMod = ((rotation % 360) + 360) % 360;
     
     // dove vuoi arrivare (mod 360)
-    const targetMod = computeRotationForIndex(startIdx, 0);
+    const targetMod = computeRotationForIndex(startIdx);
     
     // delta minimo per arrivare al target
     const delta = (360 + targetMod - currentMod) % 360;
@@ -596,8 +596,9 @@ html = f"""
           <div class="packLabel">Numero pacco scelto</div>
           <input id="packPick" class="packInput" inputmode="numeric" placeholder="1-10" />
         </div>
+        <button class="ok big" id="malusOk" disabled>OK</button>
       </div>
-      <button class="ok center big" id="malusOk" disabled>OK</button>
+      
     </div>
   </div>
 
